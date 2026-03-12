@@ -1,6 +1,7 @@
 # Symphony Elixir
 
-This directory contains the Elixir agent orchestration service that polls Linear, creates per-issue workspaces, and runs Codex in app-server mode.
+This directory contains the Elixir agent orchestration service that polls a pluggable tracker
+adapter, creates per-issue workspaces, and runs Codex in app-server mode.
 
 ## Environment
 
@@ -12,6 +13,10 @@ This directory contains the Elixir agent orchestration service that polls Linear
 ## Codebase-Specific Conventions
 
 - Runtime config is loaded from `WORKFLOW.md` front matter via `SymphonyElixir.Workflow` and `SymphonyElixir.Config`.
+- Treat tracker integrations as adapters behind `SymphonyElixir.Tracker` plus `SymphonyElixir.Tracker.Registry`.
+  - Keep orchestrator logic tracker-agnostic.
+  - Add tracker-specific config through `tracker.kind`, `tracker.module`, and adapter-owned fields
+    such as `project_slug` or `repo`.
 - Keep the implementation aligned with [`../SPEC.md`](../SPEC.md) where practical.
   - The implementation may be a superset of the spec.
   - The implementation must not conflict with the spec.
@@ -62,3 +67,5 @@ If behavior/config changes, update docs in the same PR:
 - `../README.md` for project concept and goals.
 - `README.md` for Elixir implementation and run instructions.
 - `WORKFLOW.md` for workflow/config contract changes.
+- `../.codex/skills/github/SKILL.md` or `../.codex/skills/linear/SKILL.md` when tracker-facing
+  workflow guidance changes.

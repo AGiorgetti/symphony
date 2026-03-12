@@ -47,8 +47,11 @@ defmodule SymphonyElixir.Config.Schema do
     embedded_schema do
       field(:kind, :string)
       field(:endpoint, :string, default: "https://api.linear.app/graphql")
+      field(:api_token, :string)
       field(:api_key, :string)
+      field(:module, :string)
       field(:project_slug, :string)
+      field(:repo, :string)
       field(:assignee, :string)
       field(:active_states, {:array, :string}, default: ["Todo", "In Progress"])
       field(:terminal_states, {:array, :string}, default: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"])
@@ -59,7 +62,7 @@ defmodule SymphonyElixir.Config.Schema do
       schema
       |> cast(
         attrs,
-        [:kind, :endpoint, :api_key, :project_slug, :assignee, :active_states, :terminal_states],
+        [:kind, :endpoint, :api_token, :api_key, :module, :project_slug, :repo, :assignee, :active_states, :terminal_states],
         empty_values: []
       )
     end
@@ -257,6 +260,7 @@ defmodule SymphonyElixir.Config.Schema do
   def parse(config) when is_map(config) do
     config
     |> normalize_keys()
+    |> normalize_tracker_keys()
     |> drop_nil_values()
     |> changeset()
     |> apply_action(:validate)
@@ -340,9 +344,14 @@ defmodule SymphonyElixir.Config.Schema do
   end
 
   defp finalize_settings(settings) do
+    tracker_env = tracker_api_token_env(settings.tracker.kind)
+
     tracker = %{
       settings.tracker
-      | api_key: resolve_secret_setting(settings.tracker.api_key, System.get_env("LINEAR_API_KEY")),
+      | api_token:
+          resolve_secret_setting(settings.tracker.api_token || settings.tracker.api_key, System.get_env(tracker_env)),
+        api_key:
+          resolve_secret_setting(settings.tracker.api_token || settings.tracker.api_key, System.get_env(tracker_env)),
         assignee: resolve_secret_setting(settings.tracker.assignee, System.get_env("LINEAR_ASSIGNEE"))
     }
 
@@ -358,6 +367,33 @@ defmodule SymphonyElixir.Config.Schema do
     }
 
     %{settings | tracker: tracker, workspace: workspace, codex: codex}
+  end
+
+  defp normalize_tracker_keys(%{"tracker" => tracker} = config) when is_map(tracker) do
+    normalized_tracker =
+      tracker
+      |> maybe_rename_tracker_key("api_key", "api_token")
+      |> maybe_rename_tracker_key("adapter_module", "module")
+
+    Map.put(config, "tracker", normalized_tracker)
+  end
+
+  defp normalize_tracker_keys(config), do: config
+
+  defp maybe_rename_tracker_key(tracker, source_key, target_key)
+       when is_map(tracker) and is_binary(source_key) and is_binary(target_key) do
+    cond do
+      Map.has_key?(tracker, target_key) ->
+        tracker
+
+      Map.has_key?(tracker, source_key) ->
+        tracker
+        |> Map.put(target_key, Map.get(tracker, source_key))
+        |> Map.delete(source_key)
+
+      true ->
+        tracker
+    end
   end
 
   defp normalize_keys(value) when is_map(value) do
@@ -452,6 +488,9 @@ defmodule SymphonyElixir.Config.Schema do
   end
 
   defp normalize_secret_value(_value), do: nil
+
+  defp tracker_api_token_env("github"), do: "GITHUB_TOKEN"
+  defp tracker_api_token_env(_kind), do: "LINEAR_API_KEY"
 
   defp default_turn_sandbox_policy(workspace) do
     writable_root =

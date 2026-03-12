@@ -5,6 +5,7 @@ defmodule SymphonyElixir.ExtensionsTest do
   import Phoenix.LiveViewTest
 
   alias SymphonyElixir.Linear.Adapter
+  alias SymphonyElixir.Tracker.Linear
   alias SymphonyElixir.Tracker.Memory
 
   @endpoint SymphonyElixirWeb.Endpoint
@@ -202,7 +203,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert :ok = Memory.update_issue_state("issue-1", "Quiet")
 
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "linear")
-    assert SymphonyElixir.Tracker.adapter() == Adapter
+    assert SymphonyElixir.Tracker.adapter() == Linear
   end
 
   test "linear adapter delegates reads and validates mutation responses" do
