@@ -12,14 +12,23 @@ var workflowPath = Path.GetFullPath(Path.Combine(dotnetRoot, "..", "elixir", "WO
 var missingWorkflowPath = Path.Combine(dotnetRoot, "missing-WORKFLOW.md");
 
 Run("Workflow loader parses config defaults and env resolution", WorkflowLoaderParsesConfig);
+Run("Workflow loader applies Codex defaults", WorkflowLoaderAppliesCodexDefaults);
 Run("Workflow store keeps last known good on invalid reload", WorkflowStoreKeepsLastKnownGood);
 Run("Prompt renderer renders strict conditionals and variables", PromptRendererRendersTemplate);
+Run("Workflow loader preserves bare workspace roots", WorkflowLoaderPreservesBareWorkspaceRoot);
+Run("Workflow loader disables stall detection when configured", WorkflowLoaderDisablesStallDetection);
+Run("Codex launch uses Windows command processor", CodexProtocolTests.CodexLaunchUsesWindowsCommandProcessor);
+Run("Codex client handles approvals, tools, and telemetry", CodexProtocolTests.CodexClientHandlesApprovalsToolsAndTelemetry);
 Run("Workspace manager reuses existing directory and preserves local changes", WorkspaceManagerReusesDirectory);
 Run("Workspace manager surfaces after_create failures", WorkspaceManagerSurfacesHookFailure);
 Run("Workspace manager ignores before_remove failure", WorkspaceManagerIgnoresBeforeRemoveFailure);
 Run("Workspace manager rejects workspace root removal", WorkspaceManagerRejectsRootRemoval);
 Run("Orchestration policy sorts and filters candidates", OrchestrationPolicyFiltersCandidates);
 Run("Linear tracker normalizes labels and blockers", LinearTrackerNormalizesIssue);
+Run("Linear tracker skips empty state fetch without API call", LinearTrackerSkipsEmptyStateFetch);
+Run("Linear tracker candidate fetch uses project and active states", LinearTrackerUsesProjectAndStatesForCandidateFetch);
+Run("Linear tracker surfaces GraphQL errors on poll", LinearTrackerSurfacesGraphQlErrorsOnPoll);
+Run("Linear GraphQL HTTP maps transport and payload failures", LinearGraphQlHttpMapsFailures);
 Run("Linear tracker paginates issue-state fetches by id", LinearTrackerPaginatesIssueStateFetches);
 Run("Valid workflow host serves observability endpoints", () => WithHost(runtimeExe, 5087, workflowPath, true, client =>
 {
@@ -133,6 +142,96 @@ Hello issue
     }
 }
 
+void WorkflowLoaderPreservesBareWorkspaceRoot()
+{
+    var tempRoot = CreateTempDir();
+    try
+    {
+        var workflowFile = Path.Combine(tempRoot, "WORKFLOW.md");
+        File.WriteAllText(workflowFile, """
+---
+tracker:
+  kind: linear
+  api_key: token
+  project_slug: bare-root-project
+workspace:
+  root: repo-workspaces
+codex:
+  command: codex app-server
+---
+Hello {{ issue.identifier }}
+""");
+
+        var workflow = new WorkflowLoader().Load(workflowFile);
+        Assert(workflow.Workspace.Root == "repo-workspaces", "bare workspace roots should be preserved as-is");
+    }
+    finally
+    {
+        Directory.Delete(tempRoot, recursive: true);
+    }
+}
+
+void WorkflowLoaderAppliesCodexDefaults()
+{
+    var tempRoot = CreateTempDir();
+    try
+    {
+        var workflowFile = Path.Combine(tempRoot, "WORKFLOW.md");
+        File.WriteAllText(workflowFile, """
+---
+tracker:
+  kind: linear
+  api_key: token
+  project_slug: default-codex-project
+workspace:
+  root: repo-workspaces
+---
+Hello {{ issue.identifier }}
+""");
+
+        var workflow = new WorkflowLoader().Load(workflowFile);
+        var approvalPolicy = workflow.Codex.ApprovalPolicy as IReadOnlyDictionary<string, object?>;
+        Assert(approvalPolicy is not null, "approval policy should default to the reject-map shape");
+        var rejectMap = approvalPolicy!["reject"] as IReadOnlyDictionary<string, object?>;
+        Assert(rejectMap is not null, "approval policy should expose a reject section");
+        Assert(rejectMap!.TryGetValue("sandbox_approval", out var sandboxApproval) && sandboxApproval is true, "approval policy should reject sandbox approvals by default");
+        var sandboxPolicy = workflow.Codex.TurnSandboxPolicy as IReadOnlyDictionary<string, object?>;
+        Assert(sandboxPolicy is not null, "turn sandbox policy should default to a concrete policy");
+        Assert(sandboxPolicy!.TryGetValue("type", out var policyType) && string.Equals(policyType?.ToString(), "workspaceWrite", StringComparison.Ordinal), "turn sandbox policy should default to workspaceWrite");
+        Assert(sandboxPolicy.TryGetValue("writableRoots", out var writableRootsValue) && writableRootsValue is IReadOnlyList<object?> writableRoots && writableRoots.Count == 1 && string.Equals(writableRoots[0]?.ToString(), Path.GetFullPath("repo-workspaces"), StringComparison.OrdinalIgnoreCase), "turn sandbox policy should target the effective workspace root");
+    }
+    finally
+    {
+        Directory.Delete(tempRoot, recursive: true);
+    }
+}
+
+void WorkflowLoaderDisablesStallDetection()
+{
+    var tempRoot = CreateTempDir();
+    try
+    {
+        var workflowFile = Path.Combine(tempRoot, "WORKFLOW.md");
+        File.WriteAllText(workflowFile, """
+---
+tracker:
+  kind: linear
+  api_key: token
+  project_slug: no-stall-project
+codex:
+  stall_timeout_ms: 0
+---
+Hello {{ issue.identifier }}
+""");
+
+        var workflow = new WorkflowLoader().Load(workflowFile);
+        Assert(workflow.Codex.StallTimeoutMs == 0, "stall_timeout_ms <= 0 should disable stall detection");
+    }
+    finally
+    {
+        Directory.Delete(tempRoot, recursive: true);
+    }
+}
 void WorkflowStoreKeepsLastKnownGood()
 {
     var tempRoot = CreateTempDir();
@@ -351,6 +450,117 @@ void LinearTrackerNormalizesIssue()
     Assert(issue.Priority == 2 && issue.State == "Todo", "priority and state should be preserved");
 }
 
+void LinearTrackerSkipsEmptyStateFetch()
+{
+    var workflow = BuildWorkflow(CreateTempDir());
+    var callCount = 0;
+    var client = new LinearTrackerClient(workflow, (query, variables, cancellationToken) =>
+    {
+        callCount += 1;
+        return Task.FromResult(JsonDocument.Parse("{}"));
+    });
+
+    var issues = client.FetchIssuesByStatesAsync([], CancellationToken.None).GetAwaiter().GetResult();
+    Assert(issues.Count == 0, "empty state fetch should return no issues");
+    Assert(callCount == 0, "empty state fetch should not call GraphQL");
+    Directory.Delete(workflow.Workspace.Root, recursive: true);
+}
+
+void LinearTrackerUsesProjectAndStatesForCandidateFetch()
+{
+    var workflow = BuildWorkflow(CreateTempDir());
+    object? capturedVariables = null;
+    var client = new LinearTrackerClient(workflow, (query, variables, cancellationToken) =>
+    {
+        capturedVariables = variables;
+        return Task.FromResult(JsonDocument.Parse("""
+{"data":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}
+"""));
+    });
+
+    var issues = client.FetchCandidateIssuesAsync(CancellationToken.None).GetAwaiter().GetResult();
+    Assert(issues.Count == 0, "empty candidate payload should return no issues");
+    Assert(capturedVariables is not null, "candidate fetch should pass GraphQL variables");
+    var projectSlug = capturedVariables!.GetType().GetProperty("projectSlug")!.GetValue(capturedVariables)?.ToString();
+    var stateNames = (IReadOnlyList<string>)capturedVariables.GetType().GetProperty("stateNames")!.GetValue(capturedVariables)!;
+    Assert(projectSlug == workflow.Tracker.ProjectSlug, "candidate fetch should pass projectSlug");
+    Assert(stateNames.SequenceEqual(workflow.Tracker.ActiveStates), "candidate fetch should pass active states");
+    Directory.Delete(workflow.Workspace.Root, recursive: true);
+}
+
+void LinearTrackerSurfacesGraphQlErrorsOnPoll()
+{
+    var workflow = BuildWorkflow(CreateTempDir());
+    var client = new LinearTrackerClient(workflow, (query, variables, cancellationToken) =>
+        Task.FromResult(JsonDocument.Parse("""
+{"errors":[{"message":"boom"}]}
+""")));
+
+    try
+    {
+        _ = client.FetchCandidateIssuesAsync(CancellationToken.None).GetAwaiter().GetResult();
+        throw new InvalidOperationException("Expected GraphQL errors to surface.");
+    }
+    catch (InvalidOperationException ex)
+    {
+        Assert(ex.Message == "linear_graphql_errors", "GraphQL errors should map to linear_graphql_errors");
+    }
+    finally
+    {
+        Directory.Delete(workflow.Workspace.Root, recursive: true);
+    }
+}
+
+void LinearGraphQlHttpMapsFailures()
+{
+    var workflow = BuildWorkflow(CreateTempDir());
+    using var statusClient = new HttpClient(new StubHttpMessageHandler(_ =>
+        Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+        {
+            Content = new StringContent("down")
+        })));
+
+    try
+    {
+        _ = LinearTrackerClient.ExecuteHttpGraphQlAsync(statusClient, workflow, "query { viewer { id } }", new { }, CancellationToken.None).GetAwaiter().GetResult();
+        throw new InvalidOperationException("Expected non-success status.");
+    }
+    catch (InvalidOperationException ex)
+    {
+        Assert(ex.Message == "linear_api_status:503", "non-success status should map to linear_api_status");
+    }
+
+    using var transportClient = new HttpClient(new StubHttpMessageHandler(_ => throw new HttpRequestException("offline")));
+    try
+    {
+        _ = LinearTrackerClient.ExecuteHttpGraphQlAsync(transportClient, workflow, "query { viewer { id } }", new { }, CancellationToken.None).GetAwaiter().GetResult();
+        throw new InvalidOperationException("Expected transport failure.");
+    }
+    catch (InvalidOperationException ex)
+    {
+        Assert(ex.Message.Contains("linear_api_request:offline", StringComparison.Ordinal), "transport failures should map to linear_api_request");
+    }
+
+    using var payloadClient = new HttpClient(new StubHttpMessageHandler(_ =>
+        Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("{not-json")
+        })));
+    try
+    {
+        _ = LinearTrackerClient.ExecuteHttpGraphQlAsync(payloadClient, workflow, "query { viewer { id } }", new { }, CancellationToken.None).GetAwaiter().GetResult();
+        throw new InvalidOperationException("Expected payload parse failure.");
+    }
+    catch (InvalidOperationException ex)
+    {
+        Assert(ex.Message.StartsWith("linear_api_payload:", StringComparison.Ordinal), "malformed payloads should map to linear_api_payload");
+    }
+    finally
+    {
+        Directory.Delete(workflow.Workspace.Root, recursive: true);
+    }
+}
+
 void LinearTrackerPaginatesIssueStateFetches()
 {
     var workflow = BuildWorkflow(CreateTempDir());
@@ -541,6 +751,14 @@ void Assert(bool condition, string message)
         throw new InvalidOperationException(message);
     }
 }
+
+sealed class StubHttpMessageHandler(Func<HttpRequestMessage, Task<HttpResponseMessage>> sendAsync) : HttpMessageHandler
+{
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => sendAsync(request);
+}
+
+
+
 
 
 

@@ -125,11 +125,15 @@ query SymphonyLinearIssuesById($ids: [ID!]!, $first: Int!, $relationFirst: Int!)
         while (true)
         {
             using var json = await _executeGraphQlAsync(PollQuery, new { projectSlug = _workflow.Tracker.ProjectSlug, stateNames, first = PageSize, relationFirst = PageSize, after }, cancellationToken);
-            var issuesNode = json.RootElement.GetProperty("data").GetProperty("issues");
+            var issuesNode = DecodeIssuesConnection(json.RootElement);
             var nodes = issuesNode.GetProperty("nodes");
             results.AddRange(nodes.EnumerateArray().Select(NormalizeIssue).Where(static issue => issue is not null)!);
 
-            var pageInfo = issuesNode.GetProperty("pageInfo");
+            if (!issuesNode.TryGetProperty("pageInfo", out var pageInfo) || pageInfo.ValueKind != JsonValueKind.Object)
+            {
+                throw new InvalidOperationException("linear_payload_shape");
+            }
+
             if (!pageInfo.GetProperty("hasNextPage").GetBoolean())
             {
                 break;
@@ -198,14 +202,31 @@ query SymphonyLinearIssuesById($ids: [ID!]!, $first: Int!, $relationFirst: Int!)
             true);
     }
 
-    private static JsonElement DecodeIssuesNode(JsonElement root)
+    private static JsonElement DecodeIssuesConnection(JsonElement root)
     {
-        if (root.TryGetProperty("errors", out _))
+        if (root.TryGetProperty("errors", out var errors) && errors.ValueKind == JsonValueKind.Array && errors.GetArrayLength() > 0)
         {
             throw new InvalidOperationException("linear_graphql_errors");
         }
 
-        return root.GetProperty("data").GetProperty("issues").GetProperty("nodes");
+        if (!root.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object ||
+            !data.TryGetProperty("issues", out var issues) || issues.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidOperationException("linear_payload_shape");
+        }
+
+        return issues;
+    }
+
+    private static JsonElement DecodeIssuesNode(JsonElement root)
+    {
+        var issues = DecodeIssuesConnection(root);
+        if (!issues.TryGetProperty("nodes", out var nodes) || nodes.ValueKind != JsonValueKind.Array)
+        {
+            throw new InvalidOperationException("linear_payload_shape");
+        }
+
+        return nodes;
     }
 
     private static DateTimeOffset? ParseDate(JsonElement issue, string propertyName)
@@ -249,7 +270,14 @@ query SymphonyLinearIssuesById($ids: [ID!]!, $first: Int!, $relationFirst: Int!)
             }
 
             var body = await response.Content.ReadAsStringAsync(cancellationToken);
-            return JsonDocument.Parse(body);
+            try
+            {
+                return JsonDocument.Parse(body);
+            }
+            catch (JsonException ex)
+            {
+                throw new InvalidOperationException($"linear_api_payload:{ex.Message}", ex);
+            }
         }
     }
 }

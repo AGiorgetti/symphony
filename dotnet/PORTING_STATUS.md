@@ -174,7 +174,7 @@
   - failure on unknown variables.
 - Added `CodexAgentRunner` in `dotnet/Symphony.DotNet/Services/AgentRunner.cs`.
 - Added a first-pass Codex app-server client in `dotnet/Symphony.DotNet/Services/CodexAppServerClient.cs` that:
-  - launches `bash -lc <codex.command>` in the workspace,
+  - launches `codex.command` through the platform shell in the workspace,
   - performs `initialize` / `initialized` / `thread/start` / `turn/start`,
   - streams Codex updates back into the orchestrator,
   - auto-handles approval and non-interactive input cases,
@@ -191,9 +191,35 @@
 - `dotnet build .\dotnet\SymphonyDotNetClassic.sln -m:1 -v minimal` passes.
 - `dotnet run --project .\dotnet\Symphony.DotNet.Tests\Symphony.DotNet.Tests.csproj --no-build` passes.
 
+## Codex / Tracker Hardening Checkpoint
+
+- Windows Codex session startup no longer depends on Git Bash:
+  - `dotnet/Symphony.DotNet/Services/CodexAppServerClient.cs` now launches `codex.command` with a Windows-safe shell strategy (`cmd.exe /d /s /c`) while preserving `/bin/bash -lc` semantics on non-Windows hosts.
+  - stdio shutdowns now surface the subprocess exit code (`codex_port_exit:<status>`) instead of a generic closed-stream error.
+- Codex config defaults now match the Elixir runtime posture more closely in `dotnet/Symphony.DotNet/Services/WorkflowLoader.cs`:
+  - `codex.approval_policy` defaults to the reject-map rather than `"never"`,
+  - `codex.turn_sandbox_policy` defaults to a concrete `workspaceWrite` policy rooted at the effective workspace root,
+  - `codex.stall_timeout_ms <= 0` now disables stall detection instead of silently reverting to the default timeout.
+- Non-interactive tool input fallback is now parity-aligned:
+  - `item/tool/requestUserInput` first tries approval labels only in auto-approve mode,
+  - otherwise it falls back to the canned non-interactive answer instead of stalling or failing prematurely.
+- `linear_graphql` tool validation and Linear transport mapping were tightened:
+  - invalid `variables` payloads now fail explicitly,
+  - poll/query paths now surface `linear_graphql_errors` and `linear_payload_shape`,
+  - HTTP transport, non-200 status, and malformed JSON bodies now map to explicit failure classes.
+- Smoke coverage now includes:
+  - Windows Codex launch strategy,
+  - approval + tool-input + dynamic-tool round-trip handling,
+  - Codex default policy/sandbox loading,
+  - stall-timeout disable semantics,
+  - Linear candidate fetch variable shape,
+  - empty-state short-circuiting,
+  - GraphQL error surfacing,
+  - HTTP transport/status/payload error mapping.
+
 ## Current Remaining Gap
 
-- The port is no longer on a placeholder runtime, but the Codex app-server path is still a first-pass implementation and has not yet been driven through a real end-to-end Codex session against live tracker data in this workspace.
+- The port is no longer on a placeholder runtime, but the app-server/tracker path has still not been driven through a real end-to-end Codex session against live tracker data in this workspace.
 - Remaining completion work is concentrated in real integration hardening, not in missing host/orchestrator scaffolding:
   - validate the app-server protocol against a live Codex runtime,
   - exercise real tracker polling/retries with valid Linear auth,

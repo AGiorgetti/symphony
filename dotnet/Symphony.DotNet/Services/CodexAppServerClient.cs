@@ -19,16 +19,7 @@ internal sealed class CodexAppServerClient(ILogger<CodexAppServerClient> logger,
 
         var process = new Process
         {
-            StartInfo = new ProcessStartInfo
-            {
-                FileName = OperatingSystem.IsWindows() ? "bash" : "/bin/bash",
-                Arguments = $"-lc \"{EscapeShellArgument(workflow.Codex.Command)}\"",
-                WorkingDirectory = canonicalWorkspace,
-                UseShellExecute = false,
-                RedirectStandardInput = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
-            },
+            StartInfo = CreateStartInfo(workflow.Codex.Command, canonicalWorkspace),
             EnableRaisingEvents = true
         };
 
@@ -55,8 +46,39 @@ internal sealed class CodexAppServerClient(ILogger<CodexAppServerClient> logger,
         }
     }
 
-    private static string EscapeShellArgument(string command) =>
-        command.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal);
+    internal static ProcessStartInfo CreateStartInfo(string command, string workingDirectory)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = ResolveShellExecutable(),
+            WorkingDirectory = workingDirectory,
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+
+        foreach (var argument in ResolveShellArguments(command))
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        return startInfo;
+    }
+
+    internal static string ResolveShellExecutable()
+    {
+        return OperatingSystem.IsWindows()
+            ? Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe"
+            : "/bin/bash";
+    }
+
+    internal static IReadOnlyList<string> ResolveShellArguments(string command)
+    {
+        return OperatingSystem.IsWindows()
+            ? ["/d", "/s", "/c", command]
+            : ["-lc", command];
+    }
 
     internal sealed class CodexAppSession : IAsyncDisposable
     {
@@ -149,11 +171,12 @@ internal sealed class CodexAppServerClient(ILogger<CodexAppServerClient> logger,
             var turnId = turnResult.RootElement.GetProperty("turn").GetProperty("id").GetString()
                 ?? throw new InvalidOperationException("invalid_turn_payload");
             var sessionId = $"{threadId}-{turnId}";
+            var deadlineUtc = DateTimeOffset.UtcNow.AddMilliseconds(_workflow.Codex.TurnTimeoutMs);
             await onUpdate(BuildUpdate("session_started", sessionId, threadId, turnId, "Codex session started", null));
 
             while (true)
             {
-                var line = await ReadStdoutLineAsync(_workflow.Codex.TurnTimeoutMs, cancellationToken);
+                var line = await ReadStdoutLineAsync(RemainingTurnTimeout(deadlineUtc), cancellationToken);
                 using var json = ParseJson(line, onUpdate);
                 if (json is null)
                 {
@@ -304,6 +327,17 @@ internal sealed class CodexAppServerClient(ILogger<CodexAppServerClient> logger,
             }
         }
 
+        private static int RemainingTurnTimeout(DateTimeOffset deadlineUtc)
+        {
+            var remaining = deadlineUtc - DateTimeOffset.UtcNow;
+            if (remaining <= TimeSpan.Zero)
+            {
+                return 0;
+            }
+
+            return remaining.TotalMilliseconds > int.MaxValue ? int.MaxValue : (int)remaining.TotalMilliseconds;
+        }
+
         private async Task<string> ReadStdoutLineAsync(int timeoutMs, CancellationToken cancellationToken)
         {
             try
@@ -316,6 +350,11 @@ internal sealed class CodexAppServerClient(ILogger<CodexAppServerClient> logger,
             }
             catch (ChannelClosedException ex)
             {
+                if (_process.HasExited)
+                {
+                    throw new InvalidOperationException($"codex_port_exit:{_process.ExitCode}", ex);
+                }
+
                 throw new InvalidOperationException("codex_stream_closed", ex);
             }
         }
@@ -428,7 +467,9 @@ internal sealed class CodexAppServerClient(ILogger<CodexAppServerClient> logger,
                     return false;
                 }
 
-                var answer = AutoApproveRequests() ? FindApprovalLabel(question) : NonInteractiveAnswer;
+                var answer = AutoApproveRequests()
+                    ? FindApprovalLabel(question) ?? NonInteractiveAnswer
+                    : NonInteractiveAnswer;
                 if (string.IsNullOrWhiteSpace(answer))
                 {
                     return false;
@@ -475,8 +516,13 @@ internal sealed class CodexAppServerClient(ILogger<CodexAppServerClient> logger,
                     query = queryProp.GetString();
                 }
 
-                if (arguments.TryGetProperty("variables", out var variablesProp) && variablesProp.ValueKind is JsonValueKind.Object or JsonValueKind.Null)
+                if (arguments.TryGetProperty("variables", out var variablesProp))
                 {
+                    if (variablesProp.ValueKind is not (JsonValueKind.Object or JsonValueKind.Null))
+                    {
+                        return FailureToolResult("`linear_graphql.variables` must be an object or null.");
+                    }
+
                     variables = variablesProp.ValueKind == JsonValueKind.Null
                         ? new { }
                         : JsonSerializer.Deserialize<object>(variablesProp.GetRawText()) ?? new { };
@@ -725,6 +771,7 @@ internal sealed class CodexAppServerClient(ILogger<CodexAppServerClient> logger,
         private enum MessageHandleResult { Continue, InputRequired, ApprovalRequired }
     }
 }
+
 
 
 

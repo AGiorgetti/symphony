@@ -1,10 +1,10 @@
 # Symphony .NET
 
-This directory contains the ASP.NET Core port-in-progress for Symphony.
+This directory contains the ASP.NET Core port of Symphony Elixir.
 
-## Current Focus
+## Current Surface
 
-The current implementation covers the observability host first:
+The current implementation covers the observability host:
 
 - `GET /`
 - `GET /dashboard.css`
@@ -13,10 +13,15 @@ The current implementation covers the observability host first:
 - `GET /api/v1/{issueIdentifier}`
 - JSON `404` and `405` handling for the known routes
 
-It also includes a spec-driven `WORKFLOW.md` loader and a background runtime service that surfaces:
+It also includes:
 
-- valid workflow state when dispatch prerequisites are satisfied
-- degraded/retrying state when workflow loading or validation fails
+- a spec-driven `WORKFLOW.md` loader with last-known-good reload behavior
+- a real background orchestrator with polling, dispatch, retries, reconciliation, and refresh coalescing
+- workspace lifecycle management and safety checks
+- a Codex app-server client with approval/user-input handling and `linear_graphql` dynamic tool support
+- a Linear tracker client with explicit transport / GraphQL error mapping
+
+On Windows, `codex.command` is launched via `cmd.exe /d /s /c`. On non-Windows hosts, it is launched via `/bin/bash -lc`.
 
 ## Validation
 
@@ -29,10 +34,8 @@ dotnet build .\Symphony.DotNet\Symphony.DotNet.csproj -v minimal
 dotnet run --project .\Symphony.DotNet.Tests\Symphony.DotNet.Tests.csproj
 ```
 
-## Next Implementation Areas
+## Remaining Gap
 
-- replace placeholder runtime state with real orchestrator state
-- implement workspace management and safety invariants from `SPEC.md`
-- implement Codex app-server runner and session accounting
-- replace placeholder workflow-loaded row with real running/retrying issue rows
-- add tracker integration beyond validation-only workflow state
+- run a live end-to-end Codex app-server session with valid local credentials
+- exercise real Linear polling/reconciliation against live tracker data
+- deepen issue-detail/history surfaces if exact dashboard parity with Elixir is required

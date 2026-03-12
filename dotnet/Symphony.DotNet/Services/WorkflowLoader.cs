@@ -33,12 +33,12 @@ internal sealed class WorkflowLoader
             ReadPositiveIntMap(config, "agent", "max_concurrent_agents_by_state"));
         var codex = new WorkflowCodexConfig(
             ReadString(config, "codex", "command") ?? "codex app-server",
-            ReadObject(config, "codex", "approval_policy") ?? "never",
+            ReadObject(config, "codex", "approval_policy") ?? DefaultApprovalPolicy(),
             ReadString(config, "codex", "thread_sandbox") ?? "workspace-write",
-            ReadObject(config, "codex", "turn_sandbox_policy"),
+            ReadObject(config, "codex", "turn_sandbox_policy") ?? DefaultTurnSandboxPolicy(workspaceRoot),
             PositiveOrDefault(ReadInt(config, "codex", "turn_timeout_ms"), 3_600_000),
             PositiveOrDefault(ReadInt(config, "codex", "read_timeout_ms"), 5_000),
-            ReadInt(config, "codex", "stall_timeout_ms") is int stall && stall > 0 ? stall : 300_000);
+            ReadInt(config, "codex", "stall_timeout_ms") is int stall ? Math.Max(0, stall) : 300_000);
         var server = new WorkflowServerConfig(ReadInt(config, "server", "port"));
 
         var errors = new List<string>();
@@ -189,6 +189,39 @@ internal sealed class WorkflowLoader
         }
 
         return Path.GetFullPath(resolved);
+    }
+
+    private static IReadOnlyDictionary<string, object?> DefaultApprovalPolicy()
+    {
+        return new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["reject"] = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["sandbox_approval"] = true,
+                ["rules"] = true,
+                ["mcp_elicitations"] = true
+            }
+        };
+    }
+
+    private static IReadOnlyDictionary<string, object?> DefaultTurnSandboxPolicy(string workspaceRoot)
+    {
+        var writableRoot = Path.GetFullPath(string.IsNullOrWhiteSpace(workspaceRoot)
+            ? Path.Combine(Path.GetTempPath(), "symphony_workspaces")
+            : workspaceRoot);
+
+        return new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["type"] = "workspaceWrite",
+            ["writableRoots"] = new List<object?> { writableRoot },
+            ["readOnlyAccess"] = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["type"] = "fullAccess"
+            },
+            ["networkAccess"] = false,
+            ["excludeTmpdirEnvVar"] = false,
+            ["excludeSlashTmp"] = false
+        };
     }
 
     private static int PositiveOrDefault(int? value, int fallback) => value is > 0 ? value.Value : fallback;
