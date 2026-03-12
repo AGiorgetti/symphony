@@ -81,7 +81,7 @@ mise exec -- mix release
 Then launch the generated release instead of relying on the Unix-style `./bin/symphony` example:
 
 ```powershell
-.\_build\dev\rel\symphony\bin\symphony.bat .\WORKFLOW.md
+.\_build\dev\rel\symphony_elixir\bin\symphony_elixir.bat .\WORKFLOW.md
 ```
 
 ## Configuration

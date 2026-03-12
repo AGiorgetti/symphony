@@ -47,11 +47,8 @@ defmodule SymphonyElixir.Tracker.GitHub do
         {:ok, nil} ->
           {:cont, {:ok, acc}}
 
-        {:ok, issue} when pull_request_issue?(issue) ->
-          {:cont, {:ok, acc}}
-
         {:ok, issue} ->
-          {:cont, {:ok, acc ++ [normalize_issue(issue, settings)]}}
+          {:cont, {:ok, append_issue_if_relevant(acc, issue, settings)}}
 
         {:error, reason} ->
           {:halt, {:error, reason}}
@@ -158,16 +155,14 @@ defmodule SymphonyElixir.Tracker.GitHub do
   end
 
   defp resolve_issue_state(issue, labels, %Schema{} = settings) do
-    cond do
-      issue["state"] == "closed" ->
-        pick_state_label(labels, settings.tracker.terminal_states) ||
-          List.first(settings.tracker.terminal_states) ||
-          "Closed"
-
-      true ->
-        pick_state_label(labels, settings.tracker.active_states) ||
-          List.first(settings.tracker.active_states) ||
-          "Open"
+    if issue["state"] == "closed" do
+      pick_state_label(labels, settings.tracker.terminal_states) ||
+        List.first(settings.tracker.terminal_states) ||
+        "Closed"
+    else
+      pick_state_label(labels, settings.tracker.active_states) ||
+        List.first(settings.tracker.active_states) ||
+        "Open"
     end
   end
 
@@ -231,6 +226,14 @@ defmodule SymphonyElixir.Tracker.GitHub do
     Enum.reject(labels, fn label ->
       MapSet.member?(workflow_labels, normalize_name(label))
     end)
+  end
+
+  defp append_issue_if_relevant(acc, issue, settings) when is_list(acc) do
+    if pull_request_issue?(issue) do
+      acc
+    else
+      acc ++ [normalize_issue(issue, settings)]
+    end
   end
 
   defp pick_state_label(labels, configured_states) when is_list(labels) and is_list(configured_states) do

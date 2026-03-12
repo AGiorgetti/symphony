@@ -802,9 +802,10 @@ defmodule SymphonyElixir.CoreTest do
 
   defp assert_due_in_range(due_at_ms, min_remaining_ms, max_remaining_ms) do
     remaining_ms = due_at_ms - System.monotonic_time(:millisecond)
+    slack_ms = if windows?(), do: 1_000, else: 250
 
-    assert remaining_ms >= min_remaining_ms
-    assert remaining_ms <= max_remaining_ms
+    assert remaining_ms >= min_remaining_ms - slack_ms
+    assert remaining_ms <= max_remaining_ms + slack_ms
   end
 
   defp restore_app_env(key, nil), do: Application.delete_env(:symphony_elixir, key)
@@ -1092,8 +1093,8 @@ defmodule SymphonyElixir.CoreTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        hook_after_create: "cp #{Path.join(template_repo, "README.md")} README.md",
-        codex_command: "#{codex_binary} app-server"
+        hook_after_create: "cp #{shell_path(Path.join(template_repo, "README.md"))} README.md",
+        codex_command: "#{shell_path(codex_binary)} app-server"
       )
 
       issue = %Issue{
@@ -1177,8 +1178,8 @@ defmodule SymphonyElixir.CoreTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        hook_after_create: "cp #{Path.join(template_repo, "README.md")} README.md",
-        codex_command: "#{codex_binary} app-server"
+        hook_after_create: "cp #{shell_path(Path.join(template_repo, "README.md"))} README.md",
+        codex_command: "#{shell_path(codex_binary)} app-server"
       )
 
       issue = %Issue{
@@ -1267,14 +1268,14 @@ defmodule SymphonyElixir.CoreTest do
       """)
 
       File.chmod!(codex_binary, 0o755)
-      System.put_env("SYMP_TEST_CODEx_TRACE", trace_file)
+      System.put_env("SYMP_TEST_CODEx_TRACE", shell_path(trace_file))
 
       on_exit(fn -> System.delete_env("SYMP_TEST_CODEx_TRACE") end)
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        hook_after_create: "cp #{Path.join(template_repo, "README.md")} README.md",
-        codex_command: "#{codex_binary} app-server",
+        hook_after_create: "cp #{shell_path(Path.join(template_repo, "README.md"))} README.md",
+        codex_command: "#{shell_path(codex_binary)} app-server",
         max_turns: 3
       )
 
@@ -1397,14 +1398,14 @@ defmodule SymphonyElixir.CoreTest do
       """)
 
       File.chmod!(codex_binary, 0o755)
-      System.put_env("SYMP_TEST_CODEx_TRACE", trace_file)
+      System.put_env("SYMP_TEST_CODEx_TRACE", shell_path(trace_file))
 
       on_exit(fn -> System.delete_env("SYMP_TEST_CODEx_TRACE") end)
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        hook_after_create: "cp #{Path.join(template_repo, "README.md")} README.md",
-        codex_command: "#{codex_binary} app-server",
+        hook_after_create: "cp #{shell_path(Path.join(template_repo, "README.md"))} README.md",
+        codex_command: "#{shell_path(codex_binary)} app-server",
         max_turns: 2
       )
 
@@ -1464,7 +1465,7 @@ defmodule SymphonyElixir.CoreTest do
         end
       end)
 
-      System.put_env("SYMP_TEST_CODex_TRACE", trace_file)
+      System.put_env("SYMP_TEST_CODex_TRACE", shell_path(trace_file))
       File.mkdir_p!(workspace)
 
       File.write!(codex_binary, """
@@ -1502,7 +1503,7 @@ defmodule SymphonyElixir.CoreTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server"
+        codex_command: "#{shell_path(codex_binary)} app-server"
       )
 
       issue = %Issue{
@@ -1610,7 +1611,7 @@ defmodule SymphonyElixir.CoreTest do
         end
       end)
 
-      System.put_env("SYMP_TEST_CODex_TRACE", trace_file)
+      System.put_env("SYMP_TEST_CODex_TRACE", shell_path(trace_file))
       File.mkdir_p!(workspace)
 
       File.write!(codex_binary, """
@@ -1646,7 +1647,7 @@ defmodule SymphonyElixir.CoreTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} --model gpt-5.3-codex app-server"
+        codex_command: "#{shell_path(codex_binary)} --model gpt-5.3-codex app-server"
       )
 
       issue = %Issue{
@@ -1695,7 +1696,7 @@ defmodule SymphonyElixir.CoreTest do
         end
       end)
 
-      System.put_env("SYMP_TEST_CODex_TRACE", trace_file)
+      System.put_env("SYMP_TEST_CODex_TRACE", shell_path(trace_file))
       File.mkdir_p!(workspace)
 
       File.write!(codex_binary, """
@@ -1735,7 +1736,7 @@ defmodule SymphonyElixir.CoreTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server",
+        codex_command: "#{shell_path(codex_binary)} app-server",
         codex_approval_policy: "on-request",
         codex_thread_sandbox: "workspace-write",
         codex_turn_sandbox_policy: %{

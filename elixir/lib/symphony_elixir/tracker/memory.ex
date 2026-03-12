@@ -59,10 +59,8 @@ defmodule SymphonyElixir.Tracker.Memory do
 
   @spec create_comment(String.t(), String.t()) :: :ok | {:error, term()}
   def create_comment(issue_id, body) when is_binary(issue_id) and is_binary(body) do
-    case post_comment(%Issue{id: issue_id, identifier: issue_id}, body, %Schema{tracker: %Schema.Tracker{}}) do
-      {:ok, _comment_id} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
+    send_event({:memory_tracker_comment, issue_id, body})
+    :ok
   end
 
   @spec post_comment(Issue.t(), String.t(), Schema.t()) :: {:ok, term()} | {:error, term()}

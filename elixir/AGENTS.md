@@ -8,6 +8,8 @@ adapter, creates per-issue workspaces, and runs Codex in app-server mode.
 - Elixir: `1.19.x` (OTP 28) via `mise`.
 - Install deps: `mix setup`.
 - Main quality gate: `make all` (format check, lint, coverage, dialyzer).
+- CI enforces `make all` on Ubuntu.
+  - On Windows, use the equivalent local loop: `mix build`, `mix lint`, `mix test`, and `mix release`.
 
 
 ## Codebase-Specific Conventions
@@ -36,6 +38,9 @@ Run targeted tests while iterating, then run full gates before handoff.
 ```bash
 make all
 ```
+
+On Windows, prefer the equivalent `mix` commands above for local validation, then rely on PR CI for
+the Ubuntu `make all` gate.
 
 ## Required Rules
 

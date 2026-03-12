@@ -53,24 +53,27 @@ defmodule SymphonyElixir.AppServerTest do
 
       File.mkdir_p!(workspace_root)
       File.mkdir_p!(outside_workspace)
-      File.ln_s!(outside_workspace, symlink_workspace)
 
-      write_workflow_file!(Workflow.workflow_file_path(),
-        workspace_root: workspace_root
-      )
+      if ensure_symlink!(outside_workspace, symlink_workspace) == :ok do
+        write_workflow_file!(Workflow.workflow_file_path(),
+          workspace_root: workspace_root
+        )
 
-      issue = %Issue{
-        id: "issue-workspace-symlink-guard",
-        identifier: "MT-1000",
-        title: "Validate symlink workspace guard",
-        description: "Ensure app-server refuses symlink escape cwd targets",
-        state: "In Progress",
-        url: "https://example.org/issues/MT-1000",
-        labels: ["backend"]
-      }
+        issue = %Issue{
+          id: "issue-workspace-symlink-guard",
+          identifier: "MT-1000",
+          title: "Validate symlink workspace guard",
+          description: "Ensure app-server refuses symlink escape cwd targets",
+          state: "In Progress",
+          url: "https://example.org/issues/MT-1000",
+          labels: ["backend"]
+        }
 
-      assert {:error, {:invalid_workspace_cwd, :symlink_escape, ^symlink_workspace, _root}} =
-               AppServer.run(symlink_workspace, "guard", issue)
+        assert {:error, {:invalid_workspace_cwd, :symlink_escape, ^symlink_workspace, _root}} =
+                 AppServer.run(symlink_workspace, "guard", issue)
+      else
+        assert windows?()
+      end
     after
       File.rm_rf(test_root)
     end
@@ -98,7 +101,7 @@ defmodule SymphonyElixir.AppServerTest do
         end
       end)
 
-      System.put_env("SYMP_TEST_CODEx_TRACE", trace_file)
+      System.put_env("SYMP_TEST_CODEx_TRACE", shell_path(trace_file))
       File.mkdir_p!(workspace)
 
       File.write!(codex_binary, """
@@ -155,7 +158,7 @@ defmodule SymphonyElixir.AppServerTest do
 
         write_workflow_file!(Workflow.workflow_file_path(),
           workspace_root: workspace_root,
-          codex_command: "#{codex_binary} app-server",
+          codex_command: "#{shell_path(codex_binary)} app-server",
           codex_turn_sandbox_policy: configured_policy
         )
 
@@ -205,7 +208,7 @@ defmodule SymphonyElixir.AppServerTest do
         end
       end)
 
-      System.put_env("SYMP_TEST_CODEx_TRACE", trace_file)
+      System.put_env("SYMP_TEST_CODEx_TRACE", shell_path(trace_file))
       File.mkdir_p!(workspace)
 
       File.write!(codex_binary, """
@@ -240,7 +243,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server"
+        codex_command: "#{shell_path(codex_binary)} app-server"
       )
 
       issue = %Issue{
@@ -303,7 +306,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server"
+        codex_command: "#{shell_path(codex_binary)} app-server"
       )
 
       issue = %Issue{
@@ -347,7 +350,7 @@ defmodule SymphonyElixir.AppServerTest do
         end
       end)
 
-      System.put_env("SYMP_TEST_CODex_TRACE", trace_file)
+      System.put_env("SYMP_TEST_CODex_TRACE", shell_path(trace_file))
       File.mkdir_p!(workspace)
 
       File.write!(codex_binary, """
@@ -386,7 +389,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server",
+        codex_command: "#{shell_path(codex_binary)} app-server",
         codex_approval_policy: "never"
       )
 
@@ -484,7 +487,7 @@ defmodule SymphonyElixir.AppServerTest do
         end
       end)
 
-      System.put_env("SYMP_TEST_CODEx_TRACE", trace_file)
+      System.put_env("SYMP_TEST_CODEx_TRACE", shell_path(trace_file))
       File.mkdir_p!(workspace)
 
       File.write!(codex_binary, """
@@ -523,7 +526,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server",
+        codex_command: "#{shell_path(codex_binary)} app-server",
         codex_approval_policy: "never"
       )
 
@@ -608,7 +611,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server",
+        codex_command: "#{shell_path(codex_binary)} app-server",
         codex_approval_policy: "never"
       )
 
@@ -659,7 +662,7 @@ defmodule SymphonyElixir.AppServerTest do
         end
       end)
 
-      System.put_env("SYMP_TEST_CODEx_TRACE", trace_file)
+      System.put_env("SYMP_TEST_CODEx_TRACE", shell_path(trace_file))
       File.mkdir_p!(workspace)
 
       File.write!(codex_binary, """
@@ -698,7 +701,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server"
+        codex_command: "#{shell_path(codex_binary)} app-server"
       )
 
       issue = %Issue{
@@ -759,7 +762,7 @@ defmodule SymphonyElixir.AppServerTest do
         end
       end)
 
-      System.put_env("SYMP_TEST_CODEx_TRACE", trace_file)
+      System.put_env("SYMP_TEST_CODEx_TRACE", shell_path(trace_file))
       File.mkdir_p!(workspace)
 
       File.write!(codex_binary, """
@@ -798,7 +801,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server"
+        codex_command: "#{shell_path(codex_binary)} app-server"
       )
 
       issue = %Issue{
@@ -861,7 +864,7 @@ defmodule SymphonyElixir.AppServerTest do
         end
       end)
 
-      System.put_env("SYMP_TEST_CODEx_TRACE", trace_file)
+      System.put_env("SYMP_TEST_CODEx_TRACE", shell_path(trace_file))
       File.mkdir_p!(workspace)
 
       File.write!(codex_binary, """
@@ -900,7 +903,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server"
+        codex_command: "#{shell_path(codex_binary)} app-server"
       )
 
       issue = %Issue{
@@ -983,7 +986,7 @@ defmodule SymphonyElixir.AppServerTest do
         end
       end)
 
-      System.put_env("SYMP_TEST_CODEx_TRACE", trace_file)
+      System.put_env("SYMP_TEST_CODEx_TRACE", shell_path(trace_file))
       File.mkdir_p!(workspace)
 
       File.write!(codex_binary, """
@@ -1022,7 +1025,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server"
+        codex_command: "#{shell_path(codex_binary)} app-server"
       )
 
       issue = %Issue{
@@ -1112,7 +1115,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server"
+        codex_command: "#{shell_path(codex_binary)} app-server"
       )
 
       issue = %Issue{
@@ -1176,7 +1179,7 @@ defmodule SymphonyElixir.AppServerTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server"
+        codex_command: "#{shell_path(codex_binary)} app-server"
       )
 
       issue = %Issue{

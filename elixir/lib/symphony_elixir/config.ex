@@ -115,30 +115,34 @@ defmodule SymphonyElixir.Config do
   end
 
   defp validate_semantics(settings) do
-    cond do
-      is_nil(settings.tracker.kind) ->
-        {:error, :missing_tracker_kind}
-
-      settings.tracker.kind == "linear" and not is_binary(settings.tracker.api_token) ->
-        {:error, :missing_linear_api_token}
-
-      settings.tracker.kind == "linear" and not is_binary(settings.tracker.project_slug) ->
-        {:error, :missing_linear_project_slug}
-
-      settings.tracker.kind == "github" and not is_binary(settings.tracker.api_token) ->
-        {:error, :missing_github_api_token}
-
-      settings.tracker.kind == "github" and not is_binary(settings.tracker.repo) ->
-        {:error, :missing_github_repo}
-
-      true ->
-        Registry.resolve(settings)
-        |> case do
-          {:ok, _module} -> :ok
-          {:error, reason} -> {:error, reason}
-        end
+    with :ok <- validate_tracker_requirements(settings.tracker),
+         {:ok, _module} <- Registry.resolve(settings) do
+      :ok
     end
   end
+
+  defp validate_tracker_requirements(%{kind: nil}), do: {:error, :missing_tracker_kind}
+
+  defp validate_tracker_requirements(%{kind: "linear", api_token: api_token})
+       when not is_binary(api_token) do
+    {:error, :missing_linear_api_token}
+  end
+
+  defp validate_tracker_requirements(%{kind: "linear", project_slug: project_slug})
+       when not is_binary(project_slug) do
+    {:error, :missing_linear_project_slug}
+  end
+
+  defp validate_tracker_requirements(%{kind: "github", api_token: api_token})
+       when not is_binary(api_token) do
+    {:error, :missing_github_api_token}
+  end
+
+  defp validate_tracker_requirements(%{kind: "github", repo: repo}) when not is_binary(repo) do
+    {:error, :missing_github_repo}
+  end
+
+  defp validate_tracker_requirements(_tracker), do: :ok
 
   defp format_config_error(reason) do
     case reason do

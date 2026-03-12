@@ -62,7 +62,18 @@ defmodule SymphonyElixir.Config.Schema do
       schema
       |> cast(
         attrs,
-        [:kind, :endpoint, :api_token, :api_key, :module, :project_slug, :repo, :assignee, :active_states, :terminal_states],
+        [
+          :kind,
+          :endpoint,
+          :api_token,
+          :api_key,
+          :module,
+          :project_slug,
+          :repo,
+          :assignee,
+          :active_states,
+          :terminal_states
+        ],
         empty_values: []
       )
     end
@@ -346,12 +357,16 @@ defmodule SymphonyElixir.Config.Schema do
   defp finalize_settings(settings) do
     tracker_env = tracker_api_token_env(settings.tracker.kind)
 
+    tracker_api_token =
+      resolve_secret_setting(
+        settings.tracker.api_token || settings.tracker.api_key,
+        System.get_env(tracker_env)
+      )
+
     tracker = %{
       settings.tracker
-      | api_token:
-          resolve_secret_setting(settings.tracker.api_token || settings.tracker.api_key, System.get_env(tracker_env)),
-        api_key:
-          resolve_secret_setting(settings.tracker.api_token || settings.tracker.api_key, System.get_env(tracker_env)),
+      | api_token: tracker_api_token,
+        api_key: tracker_api_token,
         assignee: resolve_secret_setting(settings.tracker.assignee, System.get_env("LINEAR_ASSIGNEE"))
     }
 

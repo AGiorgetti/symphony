@@ -28,7 +28,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        hook_after_create: "git clone --depth 1 #{template_repo} ."
+        hook_after_create: "git clone --depth 1 #{shell_path(template_repo)} ."
       )
 
       assert {:ok, workspace} = Workspace.create_for_issue("S-1")
@@ -129,15 +129,18 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
       File.mkdir_p!(workspace_root)
       File.mkdir_p!(outside_root)
-      File.ln_s!(outside_root, symlink_path)
 
-      write_workflow_file!(Workflow.workflow_file_path(), workspace_root: workspace_root)
+      if ensure_symlink!(outside_root, symlink_path) == :ok do
+        write_workflow_file!(Workflow.workflow_file_path(), workspace_root: workspace_root)
 
-      assert {:ok, canonical_outside_root} = SymphonyElixir.PathSafety.canonicalize(outside_root)
-      assert {:ok, canonical_workspace_root} = SymphonyElixir.PathSafety.canonicalize(workspace_root)
+        assert {:ok, canonical_outside_root} = SymphonyElixir.PathSafety.canonicalize(outside_root)
+        assert {:ok, canonical_workspace_root} = SymphonyElixir.PathSafety.canonicalize(workspace_root)
 
-      assert {:error, {:workspace_outside_root, ^canonical_outside_root, ^canonical_workspace_root}} =
-               Workspace.create_for_issue("MT-SYM")
+        assert {:error, {:workspace_outside_root, ^canonical_outside_root, ^canonical_workspace_root}} =
+                 Workspace.create_for_issue("MT-SYM")
+      else
+        assert windows?()
+      end
     after
       File.rm_rf(test_root)
     end
@@ -155,16 +158,19 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       linked_root = Path.join(test_root, "linked-workspaces")
 
       File.mkdir_p!(actual_root)
-      File.ln_s!(actual_root, linked_root)
 
-      write_workflow_file!(Workflow.workflow_file_path(), workspace_root: linked_root)
+      if ensure_symlink!(actual_root, linked_root) == :ok do
+        write_workflow_file!(Workflow.workflow_file_path(), workspace_root: linked_root)
 
-      assert {:ok, canonical_workspace} =
-               SymphonyElixir.PathSafety.canonicalize(Path.join(actual_root, "MT-LINK"))
+        assert {:ok, canonical_workspace} =
+                 SymphonyElixir.PathSafety.canonicalize(Path.join(actual_root, "MT-LINK"))
 
-      assert {:ok, workspace} = Workspace.create_for_issue("MT-LINK")
-      assert workspace == canonical_workspace
-      assert File.dir?(workspace)
+        assert {:ok, workspace} = Workspace.create_for_issue("MT-LINK")
+        assert workspace == canonical_workspace
+        assert File.dir?(workspace)
+      else
+        assert windows?()
+      end
     after
       File.rm_rf(test_root)
     end
@@ -610,8 +616,8 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        hook_after_create: "echo after_create > after_create.log\necho call >> \"#{after_create_counter}\"",
-        hook_before_remove: "echo before_remove > \"#{before_remove_marker}\""
+        hook_after_create: "echo after_create > after_create.log\necho call >> \"#{shell_path(after_create_counter)}\"",
+        hook_before_remove: "echo before_remove > \"#{shell_path(before_remove_marker)}\""
       )
 
       config = Config.settings!()
@@ -741,7 +747,6 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert config.tracker.endpoint == "https://api.linear.app/graphql"
     assert config.tracker.api_key == nil
     assert config.tracker.project_slug == nil
-    assert config.workspace.root == Path.join(System.tmp_dir!(), "symphony_workspaces")
     assert config.agent.max_concurrent_agents == 10
     assert config.codex.command == "codex app-server"
 
@@ -757,6 +762,11 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
     assert {:ok, canonical_default_workspace_root} =
              SymphonyElixir.PathSafety.canonicalize(Path.join(System.tmp_dir!(), "symphony_workspaces"))
+
+    assert {:ok, configured_workspace_root} =
+             SymphonyElixir.PathSafety.canonicalize(config.workspace.root)
+
+    assert configured_workspace_root == canonical_default_workspace_root
 
     assert Config.codex_turn_sandbox_policy() == %{
              "type" => "workspaceWrite",
@@ -1126,8 +1136,12 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     path = Path.join(System.tmp_dir!(), invalid_segment)
     expanded_path = Path.expand(path)
 
-    assert {:error, {:path_canonicalize_failed, ^expanded_path, :enametoolong}} =
-             SymphonyElixir.PathSafety.canonicalize(path)
+    if windows?() do
+      assert {:ok, ^expanded_path} = SymphonyElixir.PathSafety.canonicalize(path)
+    else
+      assert {:error, {:path_canonicalize_failed, ^expanded_path, :enametoolong}} =
+               SymphonyElixir.PathSafety.canonicalize(path)
+    end
   end
 
   test "runtime sandbox policy resolution defaults when omitted and ignores workspace for explicit policies" do

@@ -22,7 +22,15 @@ defmodule SymphonyElixir.TestSupport do
       alias SymphonyElixir.Workspace
 
       import SymphonyElixir.TestSupport,
-        only: [write_workflow_file!: 1, write_workflow_file!: 2, restore_env: 2, stop_default_http_server: 0]
+        only: [
+          write_workflow_file!: 1,
+          write_workflow_file!: 2,
+          restore_env: 2,
+          stop_default_http_server: 0,
+          shell_path: 1,
+          ensure_symlink!: 2,
+          windows?: 0
+        ]
 
       setup do
         workflow_root =
@@ -64,6 +72,40 @@ defmodule SymphonyElixir.TestSupport do
     end
 
     :ok
+  end
+
+  def windows? do
+    match?({:win32, _}, :os.type())
+  end
+
+  def shell_path(path) when is_binary(path) do
+    case {windows?(), path} do
+      {true, <<drive, ?:, rest::binary>>} when drive in ?A..?Z or drive in ?a..?z ->
+        "/" <> String.downcase(<<drive>>) <> String.replace(rest, "\\", "/")
+
+      {true, _} ->
+        String.replace(path, "\\", "/")
+
+      {false, _} ->
+        path
+    end
+  end
+
+  def ensure_symlink!(target, link_path) when is_binary(target) and is_binary(link_path) do
+    case File.ln_s(target, link_path) do
+      :ok ->
+        :ok
+
+      {:error, reason} when reason in [:eacces, :eperm, :enotsup, :notsup] ->
+        :unsupported
+
+      {:error, reason} ->
+        raise File.LinkError,
+          reason: reason,
+          source: target,
+          destination: link_path,
+          action: "create symlink"
+    end
   end
 
   def restore_env(key, nil), do: System.delete_env(key)
@@ -205,7 +247,7 @@ defmodule SymphonyElixir.TestSupport do
   end
 
   defp yaml_value(value) when is_binary(value) do
-    "\"" <> String.replace(value, "\"", "\\\"") <> "\""
+    "'" <> String.replace(value, "'", "''") <> "'"
   end
 
   defp yaml_value(value) when is_integer(value), do: to_string(value)

@@ -45,12 +45,6 @@ defmodule SymphonyElixir.Tracker do
     end
   end
 
-  @spec update_issue_state(String.t(), String.t()) :: :ok | {:error, term()}
-  def update_issue_state(issue_id, state_name) do
-    issue = %Issue{id: issue_id, identifier: issue_id}
-    update_issue_state(issue, state_name)
-  end
-
   @spec claim_issue(Issue.t()) :: :ok | {:error, term()}
   def claim_issue(%Issue{} = issue) do
     with_adapter(fn adapter, settings -> adapter.claim_issue(issue, settings) end)
@@ -69,6 +63,13 @@ defmodule SymphonyElixir.Tracker do
   @spec find_or_create_workpad_comment(Issue.t(), String.t()) :: {:ok, comment_id()} | {:error, term()}
   def find_or_create_workpad_comment(%Issue{} = issue, marker) when is_binary(marker) do
     with_adapter(fn adapter, settings -> adapter.find_or_create_workpad_comment(issue, marker, settings) end)
+  end
+
+  @spec update_issue_state(String.t(), String.t()) :: :ok | {:error, term()}
+  def update_issue_state(issue_id, state_name)
+      when is_binary(issue_id) and is_binary(state_name) do
+    issue = %Issue{id: issue_id, identifier: issue_id}
+    update_issue_state(issue, state_name)
   end
 
   @spec update_issue_state(Issue.t(), String.t()) :: :ok | {:error, term()}

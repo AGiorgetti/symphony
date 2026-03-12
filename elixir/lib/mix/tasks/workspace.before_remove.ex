@@ -71,16 +71,27 @@ defmodule Mix.Tasks.Workspace.BeforeRemove do
            "--state",
            "open",
            "--json",
-           "number",
-           "--jq",
-           ".[].number"
+           "number"
          ]) do
       {:ok, output} ->
-        output
-        |> String.split("\n", trim: true)
-        |> Enum.reject(&(&1 == ""))
+        parse_pull_request_numbers(output)
 
       {:error, _reason} ->
+        []
+    end
+  end
+
+  defp parse_pull_request_numbers(output) when is_binary(output) do
+    case Jason.decode(output) do
+      {:ok, entries} when is_list(entries) ->
+        entries
+        |> Enum.flat_map(fn
+          %{"number" => number} when is_integer(number) -> [to_string(number)]
+          %{"number" => number} when is_binary(number) -> [number]
+          _ -> []
+        end)
+
+      _ ->
         []
     end
   end
@@ -131,10 +142,30 @@ defmodule Mix.Tasks.Workspace.BeforeRemove do
         {:error, {:enoent, ""}}
 
       path ->
-        case System.cmd(path, args, stderr_to_stdout: true) do
+        case System.cmd(command_runner(path), command_args(path, args), stderr_to_stdout: true) do
           {output, 0} -> {:ok, output}
           {output, status} -> {:error, {status, output}}
         end
     end
+  end
+
+  defp command_runner(path) do
+    if windows_command_script?(path) do
+      System.find_executable("cmd") || "cmd"
+    else
+      path
+    end
+  end
+
+  defp command_args(path, args) do
+    if windows_command_script?(path) do
+      ["/c", path | args]
+    else
+      args
+    end
+  end
+
+  defp windows_command_script?(path) when is_binary(path) do
+    match?({:win32, _}, :os.type()) and String.downcase(Path.extname(path)) in [".bat", ".cmd"]
   end
 end

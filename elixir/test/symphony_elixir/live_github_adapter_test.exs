@@ -3,6 +3,7 @@ defmodule SymphonyElixir.LiveGitHubAdapterTest do
 
   require Logger
 
+  alias SymphonyElixir.GitHub.Client, as: GitHubClient
   alias SymphonyElixir.Tracker.GitHub
 
   @moduletag :live_e2e
@@ -74,8 +75,7 @@ defmodule SymphonyElixir.LiveGitHubAdapterTest do
       assert updated_issue.id == issue.id
       assert updated_issue.state == "Done"
 
-      assert {:ok, comments} =
-               SymphonyElixir.GitHub.Client.list_issue_comments(settings, issue.id)
+      assert {:ok, comments} = GitHubClient.list_issue_comments(settings, issue.id)
 
       assert Enum.any?(comments, fn
                %{"id" => ^comment_id, "body" => body} ->
