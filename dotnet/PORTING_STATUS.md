@@ -93,3 +93,108 @@
   - live smoke test after explicit Kestrel port binding change
   - method-specific `405` behavior parity
   - real workflow/orchestrator integration behind the presenter
+## Spec Reminder
+
+- Continue implementation against `SPEC.md`, not just Elixir parity.
+- Immediate areas to align before expanding features:
+  - workflow/config parsing and validation
+  - API error/method behavior
+  - observability payload semantics
+  - workspace and agent-runner boundaries
+## Verification Update
+
+- Smoke-tested ASP.NET Core host against `C:\Work\symphony\elixir\WORKFLOW.md`.
+- With `LINEAR_API_KEY` set, verified:
+  - `GET /api/v1/state` -> `200`
+  - `POST /api/v1/refresh` -> `202`
+  - `GET /api/v1/WORKFLOW` -> `200`
+  - wrong method on `/api/v1/state` -> `405`
+- Current runtime is still workflow-validation-driven placeholder state, not a full orchestrator.
+## Runtime Stability Fix
+
+- Disabled default host logging providers and switched to console-only logging.
+- Reason: Windows EventLog logging was throwing access-denied during background-service warnings and stopping the runtime before degraded snapshots could publish.
+## Harness Update
+
+- Added `Symphony.DotNet` and `Symphony.DotNet.Tests` to `SymphonyDotNet.slnx`.
+- Added `dotnet/README.md` and `dotnet/AGENTS.md` with current commands and guardrails.
+## Latest Stable Checkpoint
+
+- `dotnet build .\\dotnet\\SymphonyDotNet.slnx -v minimal` passes.
+- `dotnet run --project .\\dotnet\\Symphony.DotNet.Tests\\Symphony.DotNet.Tests.csproj` passes.
+- Current implementation status:
+  - ASP.NET Core observability host is working.
+  - `WORKFLOW.md` loading/validation is wired in.
+  - valid and degraded workflow states are both surfaced in the API.
+  - placeholder runtime state still needs replacement with real orchestrator + tracker + Codex session behavior.
+## Solution Note
+
+- `SymphonyDotNet.slnx` did not build reliably under `dotnet build` in this workspace.
+- Switching to a standard `.sln` file for the primary solution artifact.
+## Latest Stable Checkpoint
+
+- Primary solution file: `C:\Work\symphony\dotnet\SymphonyDotNetClassic.sln`
+- `dotnet build C:\Work\symphony\dotnet\SymphonyDotNetClassic.sln -v minimal` passes.
+- `dotnet run --project C:\Work\symphony\dotnet\Symphony.DotNet.Tests\Symphony.DotNet.Tests.csproj` passes.
+- Current working surfaces:
+  - ASP.NET Core observability host
+  - dashboard HTML + CSS route
+  - `/api/v1/state`
+  - `/api/v1/refresh`
+  - `/api/v1/{issueIdentifier}`
+  - JSON `404` and `405`
+  - `WORKFLOW.md` load/validation path
+  - degraded workflow handling
+- Major remaining implementation gap:
+  - replace placeholder runtime state with real orchestrator, workspace, tracker, and Codex app-server behavior.
+## Orchestrator Milestone
+
+- Replaced the placeholder `WORKFLOW` heartbeat loop with a real orchestrator-owned runtime in `dotnet/Symphony.DotNet/Services/SymphonyRuntimeService.cs`.
+- Added a `WorkflowStore` equivalent in `dotnet/Symphony.DotNet/Services/WorkflowStore.cs`:
+  - keeps the last known good workflow,
+  - watches `WORKFLOW.md` for changes,
+  - preserves the effective config when reload fails.
+- Startup behavior is now spec-aligned:
+  - dispatch validation failure aborts host startup,
+  - missing/invalid `WORKFLOW.md` no longer degrades into fake retry rows.
+- Added orchestrator state/retry infrastructure in `dotnet/Symphony.DotNet/Services/OrchestratorModels.cs` and updated retry behavior to use the spec-aligned exponent cap (`10`) in `dotnet/Symphony.DotNet/Services/OrchestrationPolicy.cs`.
+- Wired real refresh semantics:
+  - `/api/v1/refresh` now signals the runtime and returns queue/coalescing metadata instead of a timestamp-only stub.
+- Runtime state published to the API/dashboard is now orchestrator-backed and includes polling/session/runtime metadata:
+  - `polling`
+  - `codex_app_server_pid`
+  - `runtime_seconds`
+  - `due_in_ms`
+
+## Worker / Codex Milestone
+
+- Added strict prompt rendering in `dotnet/Symphony.DotNet/Services/PromptRenderer.cs` with support for:
+  - `{{ issue.* }}` / `{{ attempt }}` variables
+  - `{% if %} / {% else %} / {% endif %}` blocks
+  - failure on unknown variables.
+- Added `CodexAgentRunner` in `dotnet/Symphony.DotNet/Services/AgentRunner.cs`.
+- Added a first-pass Codex app-server client in `dotnet/Symphony.DotNet/Services/CodexAppServerClient.cs` that:
+  - launches `bash -lc <codex.command>` in the workspace,
+  - performs `initialize` / `initialized` / `thread/start` / `turn/start`,
+  - streams Codex updates back into the orchestrator,
+  - auto-handles approval and non-interactive input cases,
+  - exposes a `linear_graphql` dynamic tool backed by Symphony Linear auth.
+- Added `TrackerClientFactory` and upgraded `LinearTrackerClient` to:
+  - send Authorization headers,
+  - short-circuit empty state lists,
+  - preserve pagination and blocker normalization behavior.
+
+## Validation Update
+
+- `dotnet build .\dotnet\Symphony.DotNet\Symphony.DotNet.csproj -v minimal` passes.
+- `dotnet build .\dotnet\Symphony.DotNet.Tests\Symphony.DotNet.Tests.csproj -v minimal` passes.
+- `dotnet build .\dotnet\SymphonyDotNetClassic.sln -m:1 -v minimal` passes.
+- `dotnet run --project .\dotnet\Symphony.DotNet.Tests\Symphony.DotNet.Tests.csproj --no-build` passes.
+
+## Current Remaining Gap
+
+- The port is no longer on a placeholder runtime, but the Codex app-server path is still a first-pass implementation and has not yet been driven through a real end-to-end Codex session against live tracker data in this workspace.
+- Remaining completion work is concentrated in real integration hardening, not in missing host/orchestrator scaffolding:
+  - validate the app-server protocol against a live Codex runtime,
+  - exercise real tracker polling/retries with valid Linear auth,
+  - deepen issue-detail history/log surfaces if parity with the Elixir dashboard needs to be exact.

@@ -1,2 +1,4 @@
 <Solution>
+  <Project Path="Symphony.DotNet.Tests/Symphony.DotNet.Tests.csproj" />
+  <Project Path="Symphony.DotNet/Symphony.DotNet.csproj" />
 </Solution>

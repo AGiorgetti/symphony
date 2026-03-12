@@ -25,11 +25,19 @@ internal sealed record ObservabilityStatePayload
 
     [JsonPropertyName("rate_limits")]
     public object? RateLimits { get; init; }
+
+    [JsonPropertyName("polling")]
+    public PollingPayload? Polling { get; init; }
 }
 
 internal sealed record CountsPayload(
     [property: JsonPropertyName("running")] int Running,
     [property: JsonPropertyName("retrying")] int Retrying);
+
+internal sealed record PollingPayload(
+    [property: JsonPropertyName("checking")] bool Checking,
+    [property: JsonPropertyName("next_poll_in_ms")] int? NextPollInMs,
+    [property: JsonPropertyName("poll_interval_ms")] int PollIntervalMs);
 
 internal sealed record RunningEntryPayload
 {
@@ -44,6 +52,9 @@ internal sealed record RunningEntryPayload
 
     [JsonPropertyName("session_id")]
     public string? SessionId { get; init; }
+
+    [JsonPropertyName("codex_app_server_pid")]
+    public string? CodexAppServerPid { get; init; }
 
     [JsonPropertyName("turn_count")]
     public int TurnCount { get; init; }
@@ -60,6 +71,9 @@ internal sealed record RunningEntryPayload
     [JsonPropertyName("last_event_at")]
     public string? LastEventAt { get; init; }
 
+    [JsonPropertyName("runtime_seconds")]
+    public int RuntimeSeconds { get; init; }
+
     [JsonPropertyName("tokens")]
     public required TokensPayload Tokens { get; init; }
 }
@@ -69,6 +83,7 @@ internal sealed record RetryEntryPayload(
     [property: JsonPropertyName("issue_identifier")] string IssueIdentifier,
     [property: JsonPropertyName("attempt")] int Attempt,
     [property: JsonPropertyName("due_at")] string DueAt,
+    [property: JsonPropertyName("due_in_ms")] int? DueInMs,
     [property: JsonPropertyName("error")] string Error);
 
 internal sealed record TokensPayload(
@@ -122,4 +137,8 @@ internal sealed record WorkspacePayload([property: JsonPropertyName("path")] str
 internal sealed record AttemptsPayload([property: JsonPropertyName("restart_count")] int RestartCount, [property: JsonPropertyName("current_retry_attempt")] int CurrentRetryAttempt);
 internal sealed record LogsPayload([property: JsonPropertyName("codex_session_logs")] IReadOnlyList<string> CodexSessionLogs);
 internal sealed record RecentEventPayload([property: JsonPropertyName("at")] string At, [property: JsonPropertyName("event")] string Event, [property: JsonPropertyName("message")] string Message);
-internal sealed record RefreshPayload([property: JsonPropertyName("requested_at")] string RequestedAt);
+internal sealed record RefreshPayload(
+    [property: JsonPropertyName("requested_at")] string RequestedAt,
+    [property: JsonPropertyName("queued")] bool Queued,
+    [property: JsonPropertyName("coalesced")] bool Coalesced,
+    [property: JsonPropertyName("operations")] IReadOnlyList<string> Operations);

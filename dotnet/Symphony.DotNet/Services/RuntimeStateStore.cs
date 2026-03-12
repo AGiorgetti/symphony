@@ -5,7 +5,16 @@ namespace Symphony.DotNet.Services;
 internal sealed class RuntimeStateStore(CliOptions options)
 {
     private readonly Lock _lock = new();
-    private RuntimeState _state = new([], [], new CodexTotalsPayload(0, 0, 0, 0), null, options.WorkflowPath);
+    private RuntimeState _state = new(
+        [],
+        [],
+        new CodexTotalsPayload(0, 0, 0, 0),
+        null,
+        new PollingState(false, null, 30_000),
+        options.WorkflowPath,
+        Path.Combine(Path.GetTempPath(), "symphony_workspaces"),
+        false,
+        ["workflow_not_loaded"]);
 
     public ObservabilityStatePayload GetStatePayload()
     {
@@ -18,7 +27,8 @@ internal sealed class RuntimeStateStore(CliOptions options)
                 Running = _state.Running.Select(ToRunningPayload).ToList(),
                 Retrying = _state.Retrying.Select(ToRetryPayload).ToList(),
                 CodexTotals = _state.CodexTotals,
-                RateLimits = _state.RateLimits
+                RateLimits = _state.RateLimits,
+                Polling = new PollingPayload(_state.Polling.Checking, _state.Polling.NextPollInMs, _state.Polling.PollIntervalMs)
             };
         }
     }
@@ -34,12 +44,13 @@ internal sealed class RuntimeStateStore(CliOptions options)
                 return null;
             }
 
+            var workspacePath = running?.WorkspacePath ?? retry?.WorkspacePath ?? Path.Combine(_state.WorkspaceRoot, issueIdentifier);
             return new IssuePayload
             {
                 IssueIdentifier = issueIdentifier,
                 IssueId = running?.IssueId ?? retry!.IssueId,
                 Status = running is not null ? "running" : "retrying",
-                Workspace = new WorkspacePayload(Path.Combine(Path.GetDirectoryName(_state.WorkflowPath) ?? Environment.CurrentDirectory, "workspaces", issueIdentifier)),
+                Workspace = new WorkspacePayload(workspacePath),
                 Attempts = new AttemptsPayload(Math.Max((retry?.Attempt ?? 0) - 1, 0), retry?.Attempt ?? 0),
                 Running = running is null ? null : ToRunningPayload(running),
                 Retry = retry is null ? null : ToRetryPayload(retry),
@@ -52,8 +63,6 @@ internal sealed class RuntimeStateStore(CliOptions options)
             };
         }
     }
-
-    public RefreshPayload RequestRefresh() => new(IsoNow());
 
     public void Update(RuntimeState state)
     {
@@ -69,11 +78,13 @@ internal sealed class RuntimeStateStore(CliOptions options)
         IssueIdentifier = state.IssueIdentifier,
         State = state.State,
         SessionId = state.SessionId,
+        CodexAppServerPid = state.CodexAppServerPid,
         TurnCount = state.TurnCount,
         LastEvent = state.LastEvent,
         LastMessage = state.LastMessage,
         StartedAt = state.StartedAt.ToString("O"),
         LastEventAt = state.LastEventAt?.ToString("O"),
+        RuntimeSeconds = state.RuntimeSeconds,
         Tokens = state.Tokens
     };
 
@@ -82,6 +93,7 @@ internal sealed class RuntimeStateStore(CliOptions options)
         state.IssueIdentifier,
         state.Attempt,
         state.DueAt.ToString("O"),
+        state.DueInMs,
         state.Error);
 
     private static string IsoNow() => DateTimeOffset.UtcNow.ToString("O");
