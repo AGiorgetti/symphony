@@ -70,6 +70,20 @@ mise exec -- mix build
 mise exec -- ./bin/symphony ./WORKFLOW.md
 ```
 
+### Windows
+
+If you are running Symphony on Windows, build the release after the normal setup/build steps:
+
+```powershell
+mise exec -- mix release
+```
+
+Then launch the generated release instead of relying on the Unix-style `./bin/symphony` example:
+
+```powershell
+.\_build\dev\rel\symphony\bin\symphony.bat .\WORKFLOW.md
+```
+
 ## Configuration
 
 Pass a custom workflow file path to `./bin/symphony` when starting the service:
