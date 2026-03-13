@@ -113,9 +113,6 @@ defmodule SymphonyElixir.Tracker.Linear do
 
       :unsupported ->
         {:error, :update_comment_unsupported}
-
-      _ ->
-        {:error, :comment_update_failed}
     end
   end
 
@@ -135,6 +132,9 @@ defmodule SymphonyElixir.Tracker.Linear do
           post_comment(issue, marker, settings)
       end
     else
+      :unsupported ->
+        {:error, :comment_lookup_unsupported}
+
       {:error, reason} ->
         {:error, reason}
     end
@@ -152,7 +152,6 @@ defmodule SymphonyElixir.Tracker.Linear do
     else
       {:error, reason} -> {:error, reason}
       false -> {:error, :issue_update_failed}
-      _ -> {:error, :issue_update_failed}
     end
   end
 
@@ -215,7 +214,6 @@ defmodule SymphonyElixir.Tracker.Linear do
     {:ok, comments}
   end
 
-  defp extract_issue_comments(%{"errors" => _errors}), do: {:error, :comment_lookup_unsupported}
   defp extract_issue_comments(_response), do: {:error, :comment_lookup_failed}
 
   defp comment_matches_marker?(%{"body" => body}, marker)

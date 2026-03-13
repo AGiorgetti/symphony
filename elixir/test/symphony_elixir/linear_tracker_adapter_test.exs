@@ -134,4 +134,162 @@ defmodule SymphonyElixir.LinearTrackerAdapterTest do
                Config.settings!()
              )
   end
+
+  test "covers invalid identifiers and comment mutation failure branches" do
+    settings = Config.settings!()
+    issue = %Issue{id: "linear-4", identifier: "MT-4"}
+
+    assert :ok = Linear.claim_issue(issue, settings)
+    assert {:error, :invalid_issue_id} = Linear.post_comment(%Issue{id: nil}, "hello", settings)
+
+    Process.put(
+      {FakeLinearTrackerClient, :graphql_result},
+      {:ok, %{"data" => %{"commentCreate" => %{"success" => false}}}}
+    )
+
+    assert {:error, :comment_create_failed} = Linear.post_comment(issue, "hello", settings)
+
+    Process.put(
+      {FakeLinearTrackerClient, :graphql_result},
+      {:ok, %{"data" => %{"commentCreate" => %{"success" => true}}}}
+    )
+
+    assert {:error, :comment_create_failed} = Linear.post_comment(issue, "hello", settings)
+
+    Process.put({FakeLinearTrackerClient, :graphql_result}, {:error, :boom})
+    assert {:error, :boom} = Linear.post_comment(issue, "hello", settings)
+
+    Process.put(
+      {FakeLinearTrackerClient, :graphql_result},
+      {:ok, %{"errors" => [%{"message" => "commentCreate unsupported"}]}}
+    )
+
+    assert {:error, :comment_create_unsupported} = Linear.post_comment(issue, "hello", settings)
+
+    assert {:error, :invalid_comment_id} =
+             Linear.update_comment(issue, nil, "updated", settings)
+
+    Process.put({FakeLinearTrackerClient, :graphql_result}, {:error, :update_failed})
+    assert {:error, :update_failed} = Linear.update_comment(issue, "comment-1", "updated", settings)
+
+    Process.put(
+      {FakeLinearTrackerClient, :graphql_result},
+      {:ok, %{"data" => %{"commentUpdate" => %{"success" => false}}}}
+    )
+
+    assert {:error, :comment_update_failed} =
+             Linear.update_comment(issue, "comment-1", "updated", settings)
+
+    Process.put({FakeLinearTrackerClient, :graphql_result}, {:ok, %{"data" => %{}}})
+
+    assert {:error, :comment_update_failed} =
+             Linear.update_comment(issue, "comment-1", "updated", settings)
+  end
+
+  test "covers workpad lookup failure and unsupported branches" do
+    issue = %Issue{id: "linear-5", identifier: "MT-5"}
+    settings = Config.settings!()
+
+    Process.put(
+      {FakeLinearTrackerClient, :graphql_result},
+      {:ok, %{"errors" => [%{"message" => "comments unsupported"}]}}
+    )
+
+    assert {:error, :comment_lookup_unsupported} =
+             Linear.find_or_create_workpad_comment(issue, "## Codex Workpad", settings)
+
+    Process.put({FakeLinearTrackerClient, :graphql_result}, {:ok, %{"data" => %{"issue" => %{}}}})
+
+    assert {:error, :comment_lookup_failed} =
+             Linear.find_or_create_workpad_comment(issue, "## Codex Workpad", settings)
+
+    Process.put(
+      {FakeLinearTrackerClient, :graphql_results},
+      [
+        {:ok,
+         %{
+           "data" => %{
+             "issue" => %{"comments" => %{"nodes" => [%{"id" => "ignored", "body" => nil}]}}
+           }
+         }},
+        {:ok, %{"data" => %{"commentCreate" => %{"success" => true, "comment" => %{"id" => "comment-10"}}}}}
+      ]
+    )
+
+    assert {:ok, "comment-10"} =
+             Linear.find_or_create_workpad_comment(issue, "## Codex Workpad", settings)
+
+    assert {:error, :invalid_issue_id} =
+             Linear.find_or_create_workpad_comment(%Issue{id: nil}, "## Codex Workpad", settings)
+  end
+
+  test "updates issue state and surfaces lookup failures" do
+    settings = Config.settings!()
+    issue = %Issue{id: "linear-6", identifier: "MT-6"}
+
+    Process.put(
+      {FakeLinearTrackerClient, :graphql_results},
+      [
+        {:ok,
+         %{
+           "data" => %{
+             "issue" => %{"team" => %{"states" => %{"nodes" => [%{"id" => "state-1"}]}}}
+           }
+         }},
+        {:ok, %{"data" => %{"issueUpdate" => %{"success" => true}}}}
+      ]
+    )
+
+    assert :ok = Linear.update_issue_state(issue, "Done", settings)
+
+    Process.put({FakeLinearTrackerClient, :graphql_results}, [{:error, :lookup_failed}])
+    assert {:error, :lookup_failed} = Linear.update_issue_state(issue, "Done", settings)
+
+    Process.put(
+      {FakeLinearTrackerClient, :graphql_results},
+      [{:ok, %{"errors" => [%{"message" => "state lookup unsupported"}]}}]
+    )
+
+    assert {:error, :state_lookup_unsupported} =
+             Linear.update_issue_state(issue, "Done", settings)
+
+    Process.put({FakeLinearTrackerClient, :graphql_results}, [{:ok, %{"data" => %{}}}])
+    assert {:error, :state_not_found} = Linear.update_issue_state(issue, "Done", settings)
+
+    Process.put(
+      {FakeLinearTrackerClient, :graphql_results},
+      [
+        {:ok,
+         %{
+           "data" => %{
+             "issue" => %{"team" => %{"states" => %{"nodes" => [%{"id" => "state-2"}]}}}
+           }
+         }},
+        {:ok, %{"data" => %{"issueUpdate" => %{"success" => false}}}}
+      ]
+    )
+
+    assert {:error, :issue_update_failed} =
+             Linear.update_issue_state(issue, "Done", settings)
+
+    Process.put(
+      {FakeLinearTrackerClient, :graphql_results},
+      [
+        {:ok,
+         %{
+           "data" => %{
+             "issue" => %{"team" => %{"states" => %{"nodes" => [%{"id" => "state-3"}]}}}
+           }
+         }},
+        {:ok, %{"data" => %{}}}
+      ]
+    )
+
+    assert {:error, :issue_update_failed} =
+             Linear.update_issue_state(issue, "Done", settings)
+
+    assert {:error, :invalid_issue_id} = Linear.update_issue_state(%Issue{id: nil}, "Done", settings)
+    assert Linear.resolve_active_states(settings) == ["Todo", "In Progress"]
+    assert Linear.resolve_terminal_states(settings) == ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
+  end
 end

@@ -28,22 +28,46 @@ defmodule SymphonyElixir.GitHubTrackerAdapterTest do
 
     def list_issue_comments(_settings, issue_id) do
       send(self(), {:github_list_issue_comments, issue_id})
-      {:ok, Process.get({__MODULE__, :comments, issue_id}, [])}
+
+      case Process.get({__MODULE__, :comments_result, issue_id}) do
+        {:error, reason} -> {:error, reason}
+        nil -> {:ok, Process.get({__MODULE__, :comments, issue_id}, [])}
+        comments when is_list(comments) -> {:ok, comments}
+      end
     end
 
     def create_issue_comment(_settings, issue_id, body) do
       send(self(), {:github_create_issue_comment, issue_id, body})
-      {:ok, Process.get({__MODULE__, :created_comment}, %{"id" => 101, "body" => body})}
+
+      case Process.get(
+             {__MODULE__, :create_comment, issue_id},
+             Process.get({__MODULE__, :created_comment})
+           ) do
+        {:error, reason} -> {:error, reason}
+        {:raw, value} -> value
+        nil -> {:ok, %{"id" => 101, "body" => body}}
+        comment -> {:ok, comment}
+      end
     end
 
     def update_issue_comment(_settings, comment_id, body) do
       send(self(), {:github_update_issue_comment, comment_id, body})
-      {:ok, %{"id" => comment_id, "body" => body}}
+
+      case Process.get({__MODULE__, :updated_comment_result, comment_id}) do
+        {:error, reason} -> {:error, reason}
+        nil -> {:ok, %{"id" => comment_id, "body" => body}}
+        comment -> {:ok, comment}
+      end
     end
 
     def update_issue(_settings, issue_id, attrs) do
       send(self(), {:github_update_issue, issue_id, attrs})
-      {:ok, attrs}
+
+      case Process.get({__MODULE__, :update_issue_result, issue_id}) do
+        {:error, reason} -> {:error, reason}
+        nil -> {:ok, attrs}
+        issue -> {:ok, issue}
+      end
     end
   end
 
@@ -254,15 +278,192 @@ defmodule SymphonyElixir.GitHubTrackerAdapterTest do
     assert length(issues) == 101
   end
 
-  defp github_settings do
-    %Schema{
-      tracker: %Schema.Tracker{
-        kind: "github",
-        api_token: "github-token",
-        repo: "octo/demo",
-        active_states: ["Todo", "In Progress"],
-        terminal_states: ["Done", "Closed"]
-      }
-    }
+  test "normalizes github issues with fallback states and assignee matching rules" do
+    Process.put(
+      {FakeGitHubClient, :issues, "open"},
+      [
+        %{
+          "number" => 91,
+          "title" => "Needs defaults",
+          "body" => "",
+          "state" => "open",
+          "labels" => [%{"name" => "backend"}, %{}],
+          "assignees" => [%{"login" => 123}],
+          "created_at" => "not-a-datetime",
+          "updated_at" => 123
+        },
+        %{
+          "number" => 93,
+          "title" => "String pull request marker",
+          "body" => "",
+          "state" => "open",
+          "labels" => [%{"name" => "Todo"}],
+          "pull_request" => "yes"
+        }
+      ]
+    )
+
+    Process.put(
+      {FakeGitHubClient, :issues, "closed"},
+      [
+        %{
+          "number" => 92,
+          "title" => "Closed fallback",
+          "body" => "",
+          "state" => "closed",
+          "labels" => [],
+          "assignees" => [%{"login" => "someone"}]
+        }
+      ]
+    )
+
+    settings = github_settings(repo: nil, assignee: "octocat")
+
+    assert {:ok, [%Issue{} = open_issue]} = GitHub.list_active_issues(settings)
+    assert open_issue.identifier == "repo#91"
+    assert open_issue.state == "Todo"
+    assert open_issue.assignee_id == nil
+    assert open_issue.assigned_to_worker == false
+    assert open_issue.labels == ["backend"]
+    assert open_issue.created_at == nil
+    assert open_issue.updated_at == nil
+
+    assert {:ok, [%Issue{} = closed_issue]} = GitHub.fetch_issues_by_states(["Done", nil], settings)
+    assert closed_issue.id == "92"
+    assert closed_issue.state == "Done"
+
+    assert {:ok, [%Issue{} = assigned_issue]} =
+             GitHub.list_active_issues(github_settings(assignee: 123, active_states: ["Todo"]))
+
+    assert assigned_issue.assigned_to_worker == true
+  end
+
+  test "skips unused state buckets and deduplicates state lookups" do
+    Process.put(
+      {FakeGitHubClient, :issues, "open"},
+      [
+        %{"number" => 101, "title" => "Todo", "body" => "", "state" => "open", "labels" => [%{"name" => "Todo"}]}
+      ]
+    )
+
+    Process.put(
+      {FakeGitHubClient, :issues, "closed"},
+      [
+        %{"number" => 102, "title" => "Done", "body" => "", "state" => "closed", "labels" => [%{"name" => "Done"}]}
+      ]
+    )
+
+    Process.put(
+      {FakeGitHubClient, :issue, "200"},
+      %{"number" => 200, "title" => "Todo", "body" => "", "state" => "open", "labels" => [%{"name" => "Todo"}]}
+    )
+
+    settings = github_settings()
+
+    assert {:ok, [%Issue{id: "101"}]} = GitHub.fetch_issues_by_states(["Todo"], settings)
+    assert_receive {:github_list_issues, "octo/demo", "open"}
+    refute_receive {:github_list_issues, "octo/demo", "closed"}
+
+    assert {:ok, [%Issue{id: "102"}]} = GitHub.fetch_issues_by_states(["Done"], settings)
+    assert_receive {:github_list_issues, "octo/demo", "closed"}
+
+    assert {:ok, [%Issue{id: "200"}]} = GitHub.fetch_issue_states_by_ids(["200", "200", "404"], settings)
+    assert_receive {:github_get_issue, "200"}
+    assert_receive {:github_get_issue, "404"}
+    refute_receive {:github_get_issue, "200"}
+  end
+
+  test "propagates github tracker read and write failures" do
+    settings = github_settings()
+    issue = %Issue{id: "301", identifier: "octo/demo#301"}
+
+    Process.put({FakeGitHubClient, :issues, "open"}, {:error, :unavailable})
+    assert {:error, :unavailable} = GitHub.list_active_issues(settings)
+
+    Process.put({FakeGitHubClient, :issue, "302"}, {:error, :lookup_failed})
+    assert {:error, :lookup_failed} = GitHub.fetch_issue_states_by_ids(["302"], settings)
+
+    Process.put(
+      {FakeGitHubClient, :issue, "303"},
+      %{"number" => 303, "title" => "No labels", "body" => "", "state" => "open"}
+    )
+
+    assert {:ok, [%Issue{id: "303", labels: []}]} = GitHub.fetch_issue_states_by_ids(["303"], settings)
+
+    assert :ok = GitHub.claim_issue(issue, settings)
+    assert GitHub.resolve_active_states(settings) == ["Todo", "In Progress"]
+    assert GitHub.resolve_terminal_states(settings) == ["Done", "Closed"]
+
+    assert {:error, :invalid_issue_id} = GitHub.post_comment(%Issue{id: nil}, "hello", settings)
+    Process.put({FakeGitHubClient, :create_comment, "301"}, %{"body" => "missing id"})
+    assert {:error, :comment_create_failed} = GitHub.post_comment(issue, "hello", settings)
+
+    Process.put({FakeGitHubClient, :create_comment, "301"}, {:error, :comment_denied})
+    assert {:error, :comment_denied} = GitHub.post_comment(issue, "hello", settings)
+
+    Process.put({FakeGitHubClient, :create_comment, "301"}, {:raw, :unexpected})
+    assert {:error, :comment_create_failed} = GitHub.post_comment(issue, "hello", settings)
+
+    assert {:error, :invalid_comment_id} = GitHub.update_comment(issue, nil, "updated", settings)
+    Process.put({FakeGitHubClient, :updated_comment_result, 77}, {:error, :update_denied})
+    assert {:error, :update_denied} = GitHub.update_comment(issue, 77, "updated", settings)
+
+    Process.put({FakeGitHubClient, :comments_result, "301"}, {:error, :comment_lookup_failed})
+
+    assert {:error, :comment_lookup_failed} =
+             GitHub.find_or_create_workpad_comment(issue, "## Codex Workpad", settings)
+
+    assert {:error, :invalid_issue_id} =
+             GitHub.find_or_create_workpad_comment(%Issue{id: nil}, "## Codex Workpad", settings)
+
+    Process.put(
+      {FakeGitHubClient, :comments_result, "301"},
+      [%{"body" => nil}, %{"id" => nil, "body" => "## Codex Workpad"}]
+    )
+
+    Process.put({FakeGitHubClient, :create_comment, "301"}, %{"id" => 333, "body" => "## Codex Workpad"})
+
+    assert {:ok, 333} =
+             GitHub.find_or_create_workpad_comment(issue, "## Codex Workpad", settings)
+  end
+
+  test "validates github issue state updates" do
+    settings = github_settings()
+
+    assert {:error, :invalid_issue_id} = GitHub.update_issue_state(%Issue{id: nil}, "Done", settings)
+
+    Process.put({FakeGitHubClient, :issue, "401"}, nil)
+    assert {:error, :issue_not_found} = GitHub.update_issue_state(%Issue{id: "401"}, "Done", settings)
+
+    Process.put(
+      {FakeGitHubClient, :issue, "402"},
+      %{"number" => 402, "title" => "Todo", "body" => "", "state" => "open", "labels" => [%{"name" => "Todo"}]}
+    )
+
+    assert {:error, {:unknown_tracker_state, "Blocked"}} =
+             GitHub.update_issue_state(%Issue{id: "402"}, "Blocked", settings)
+
+    Process.put({FakeGitHubClient, :update_issue_result, "402"}, {:error, :update_failed})
+    assert {:error, :update_failed} = GitHub.update_issue_state(%Issue{id: "402"}, "Done", settings)
+  end
+
+  defp github_settings(overrides \\ []) do
+    tracker =
+      struct!(
+        Schema.Tracker,
+        Keyword.merge(
+          [
+            kind: "github",
+            api_token: "github-token",
+            repo: "octo/demo",
+            assignee: nil,
+            active_states: ["Todo", "In Progress"],
+            terminal_states: ["Done", "Closed"]
+          ],
+          overrides
+        )
+      )
+
+    %Schema{tracker: tracker}
   end
 end

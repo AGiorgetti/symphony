@@ -145,7 +145,13 @@ defmodule SymphonyElixir.GitHub.Client do
   end
 
   defp request(%Schema{} = settings, method, path, opts) when is_atom(method) do
-    request_fun = Keyword.get(opts, :request_fun, &Req.request/1)
+    request_fun =
+      Keyword.get(
+        opts,
+        :request_fun,
+        Application.get_env(:symphony_elixir, :github_client_request_fun, &Req.request/1)
+      )
+
     params = Keyword.get(opts, :params)
     json = Keyword.get(opts, :json)
 

@@ -149,23 +149,11 @@ defmodule Mix.Tasks.Workspace.BeforeRemove do
     end
   end
 
-  defp command_runner(path) do
-    if windows_command_script?(path) do
-      System.find_executable("cmd") || "cmd"
-    else
-      path
-    end
-  end
+  @doc false
+  @spec command_runner(Path.t(), tuple(), Path.t() | nil) :: Path.t()
+  def command_runner(path, _os_type \\ :os.type(), _shell_command \\ System.get_env("COMSPEC") || "cmd"), do: path
 
-  defp command_args(path, args) do
-    if windows_command_script?(path) do
-      ["/c", path | args]
-    else
-      args
-    end
-  end
-
-  defp windows_command_script?(path) when is_binary(path) do
-    match?({:win32, _}, :os.type()) and String.downcase(Path.extname(path)) in [".bat", ".cmd"]
-  end
+  @doc false
+  @spec command_args(Path.t(), [String.t()], tuple()) :: [String.t()]
+  def command_args(_path, args, _os_type \\ :os.type()), do: args
 end

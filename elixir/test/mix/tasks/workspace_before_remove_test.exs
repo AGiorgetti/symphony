@@ -254,6 +254,66 @@ defmodule Mix.Tasks.Workspace.BeforeRemoveTest do
     )
   end
 
+  test "parses string PR numbers, ignores malformed entries, and tolerates invalid JSON" do
+    with_fake_gh(
+      """
+      #!/bin/sh
+      printf '%s\n' "$*" >> "$GH_LOG"
+
+      if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
+        exit 0
+      fi
+
+      if [ "$1" = "pr" ] && [ "$2" = "list" ] && [ "$6" = "feature/string-numbers" ]; then
+        printf '[{"number":"201"},{"skip":true},{"number":202}]'
+        exit 0
+      fi
+
+      if [ "$1" = "pr" ] && [ "$2" = "list" ] && [ "$6" = "feature/invalid-json" ]; then
+        printf 'not-json'
+        exit 0
+      fi
+
+      if [ "$1" = "pr" ] && [ "$2" = "close" ]; then
+        exit 0
+      fi
+
+      exit 99
+      """,
+      fn log_path ->
+        output =
+          capture_io(fn ->
+            BeforeRemove.run(["--branch", "feature/string-numbers"])
+          end)
+
+        assert output =~ "Closed PR #201 for branch feature/string-numbers"
+        assert output =~ "Closed PR #202 for branch feature/string-numbers"
+
+        invalid_json_output =
+          capture_io(fn ->
+            Mix.Task.reenable("workspace.before_remove")
+            BeforeRemove.run(["--branch", "feature/invalid-json"])
+          end)
+
+        assert invalid_json_output == ""
+
+        log = File.read!(log_path)
+        assert log =~ "pr close 201 --repo openai/symphony"
+        assert log =~ "pr close 202 --repo openai/symphony"
+      end
+    )
+  end
+
+  test "command helpers support Windows command scripts" do
+    path = "C:/tools/gh.cmd"
+
+    assert BeforeRemove.command_runner(path, {:win32, :nt}, nil) == path
+    assert BeforeRemove.command_runner(path, {:win32, :nt}, "C:/Windows/System32/cmd.exe") == path
+    assert BeforeRemove.command_runner(path, {:unix, :linux}, "cmd") == path
+    assert BeforeRemove.command_args(path, ["pr", "list"], {:win32, :nt}) == ["pr", "list"]
+    assert BeforeRemove.command_args(path, ["pr", "list"], {:unix, :linux}) == ["pr", "list"]
+  end
+
   defp with_fake_gh(fun) do
     with_fake_binaries(
       %{
