@@ -1,9 +1,7 @@
 defmodule SymphonyElixir.Linear.Adapter do
   @moduledoc """
-  Linear-backed tracker adapter.
+  Backward-compatible wrapper around the legacy Linear client helpers.
   """
-
-  @behaviour SymphonyElixir.Tracker
 
   alias SymphonyElixir.Linear.Client
 

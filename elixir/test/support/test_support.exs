@@ -12,17 +12,25 @@ defmodule SymphonyElixir.TestSupport do
       alias SymphonyElixir.Config
       alias SymphonyElixir.HttpServer
       alias SymphonyElixir.Linear.Client
-      alias SymphonyElixir.Linear.Issue
       alias SymphonyElixir.Orchestrator
       alias SymphonyElixir.PromptBuilder
       alias SymphonyElixir.StatusDashboard
       alias SymphonyElixir.Tracker
+      alias SymphonyElixir.Tracker.Issue
       alias SymphonyElixir.Workflow
       alias SymphonyElixir.WorkflowStore
       alias SymphonyElixir.Workspace
 
       import SymphonyElixir.TestSupport,
-        only: [write_workflow_file!: 1, write_workflow_file!: 2, restore_env: 2, stop_default_http_server: 0]
+        only: [
+          write_workflow_file!: 1,
+          write_workflow_file!: 2,
+          restore_env: 2,
+          stop_default_http_server: 0,
+          shell_path: 1,
+          ensure_symlink!: 2,
+          windows?: 0
+        ]
 
       setup do
         workflow_root =
@@ -66,6 +74,40 @@ defmodule SymphonyElixir.TestSupport do
     :ok
   end
 
+  def windows? do
+    match?({:win32, _}, :os.type())
+  end
+
+  def shell_path(path) when is_binary(path) do
+    case {windows?(), path} do
+      {true, <<drive, ?:, rest::binary>>} when drive in ?A..?Z or drive in ?a..?z ->
+        "/" <> String.downcase(<<drive>>) <> String.replace(rest, "\\", "/")
+
+      {true, _} ->
+        String.replace(path, "\\", "/")
+
+      {false, _} ->
+        path
+    end
+  end
+
+  def ensure_symlink!(target, link_path) when is_binary(target) and is_binary(link_path) do
+    case File.ln_s(target, link_path) do
+      :ok ->
+        :ok
+
+      {:error, reason} when reason in [:eacces, :eperm, :enotsup, :notsup] ->
+        :unsupported
+
+      {:error, reason} ->
+        raise File.LinkError,
+          reason: reason,
+          source: target,
+          destination: link_path,
+          action: "create symlink"
+    end
+  end
+
   def restore_env(key, nil), do: System.delete_env(key)
   def restore_env(key, value), do: System.put_env(key, value)
 
@@ -93,9 +135,11 @@ defmodule SymphonyElixir.TestSupport do
       Keyword.merge(
         [
           tracker_kind: "linear",
+          tracker_module: nil,
           tracker_endpoint: "https://api.linear.app/graphql",
           tracker_api_token: "token",
           tracker_project_slug: "project",
+          tracker_repo: nil,
           tracker_assignee: nil,
           tracker_active_states: ["Todo", "In Progress"],
           tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
@@ -128,9 +172,11 @@ defmodule SymphonyElixir.TestSupport do
       )
 
     tracker_kind = Keyword.get(config, :tracker_kind)
+    tracker_module = Keyword.get(config, :tracker_module)
     tracker_endpoint = Keyword.get(config, :tracker_endpoint)
     tracker_api_token = Keyword.get(config, :tracker_api_token)
     tracker_project_slug = Keyword.get(config, :tracker_project_slug)
+    tracker_repo = Keyword.get(config, :tracker_repo)
     tracker_assignee = Keyword.get(config, :tracker_assignee)
     tracker_active_states = Keyword.get(config, :tracker_active_states)
     tracker_terminal_states = Keyword.get(config, :tracker_terminal_states)
@@ -164,9 +210,11 @@ defmodule SymphonyElixir.TestSupport do
         "---",
         "tracker:",
         "  kind: #{yaml_value(tracker_kind)}",
+        "  module: #{yaml_value(tracker_module)}",
         "  endpoint: #{yaml_value(tracker_endpoint)}",
-        "  api_key: #{yaml_value(tracker_api_token)}",
+        "  api_token: #{yaml_value(tracker_api_token)}",
         "  project_slug: #{yaml_value(tracker_project_slug)}",
+        "  repo: #{yaml_value(tracker_repo)}",
         "  assignee: #{yaml_value(tracker_assignee)}",
         "  active_states: #{yaml_value(tracker_active_states)}",
         "  terminal_states: #{yaml_value(tracker_terminal_states)}",
@@ -199,7 +247,7 @@ defmodule SymphonyElixir.TestSupport do
   end
 
   defp yaml_value(value) when is_binary(value) do
-    "\"" <> String.replace(value, "\"", "\\\"") <> "\""
+    "'" <> String.replace(value, "'", "''") <> "'"
   end
 
   defp yaml_value(value) when is_integer(value), do: to_string(value)

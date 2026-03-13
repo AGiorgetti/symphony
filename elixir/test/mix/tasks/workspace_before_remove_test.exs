@@ -60,7 +60,7 @@ defmodule Mix.Tasks.Workspace.BeforeRemoveTest do
       fi
 
       if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
-        printf '101\n102\n'
+        printf '[{"number":101},{"number":102}]'
         exit 0
       fi
 
@@ -92,7 +92,7 @@ defmodule Mix.Tasks.Workspace.BeforeRemoveTest do
         log = File.read!(log_path)
 
         assert log =~
-                 "pr list --repo openai/symphony --head feature/workpad --state open --json number --jq .[].number"
+                 "pr list --repo openai/symphony --head feature/workpad --state open --json number"
 
         assert log =~ "pr close 101 --repo openai/symphony"
         assert log =~ "pr close 102 --repo openai/symphony"
@@ -115,7 +115,7 @@ defmodule Mix.Tasks.Workspace.BeforeRemoveTest do
       log = File.read!(log_path)
 
       assert log =~ "auth status"
-      assert log =~ "pr list --repo openai/symphony --head feature/workpad --state open --json number --jq .[].number"
+      assert log =~ "pr list --repo openai/symphony --head feature/workpad --state open --json number"
       assert log =~ "pr close 101 --repo openai/symphony"
       assert log =~ "pr close 102 --repo openai/symphony"
 
@@ -141,7 +141,7 @@ defmodule Mix.Tasks.Workspace.BeforeRemoveTest do
       fi
 
       if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
-        printf '102\n'
+        printf '[{"number":102}]'
         exit 0
       fi
 
@@ -161,7 +161,7 @@ defmodule Mix.Tasks.Workspace.BeforeRemoveTest do
         assert error_output =~ "Failed to close PR #102 for branch feature/no-output: exit 17"
         refute error_output =~ "output="
         log = File.read!(log_path)
-        assert log =~ "pr list --repo openai/symphony --head feature/no-output --state open --json number --jq .[].number"
+        assert log =~ "pr list --repo openai/symphony --head feature/no-output --state open --json number"
         assert log =~ "pr close 102 --repo openai/symphony"
       end
     )
@@ -195,7 +195,7 @@ defmodule Mix.Tasks.Workspace.BeforeRemoveTest do
         assert log =~ "auth status"
 
         assert log =~
-                 "pr list --repo openai/symphony --head feature/list-fails --state open --json number --jq .[].number"
+                 "pr list --repo openai/symphony --head feature/list-fails --state open --json number"
 
         refute log =~ "pr close"
       end
@@ -254,6 +254,66 @@ defmodule Mix.Tasks.Workspace.BeforeRemoveTest do
     )
   end
 
+  test "parses string PR numbers, ignores malformed entries, and tolerates invalid JSON" do
+    with_fake_gh(
+      """
+      #!/bin/sh
+      printf '%s\n' "$*" >> "$GH_LOG"
+
+      if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
+        exit 0
+      fi
+
+      if [ "$1" = "pr" ] && [ "$2" = "list" ] && [ "$6" = "feature/string-numbers" ]; then
+        printf '[{"number":"201"},{"skip":true},{"number":202}]'
+        exit 0
+      fi
+
+      if [ "$1" = "pr" ] && [ "$2" = "list" ] && [ "$6" = "feature/invalid-json" ]; then
+        printf 'not-json'
+        exit 0
+      fi
+
+      if [ "$1" = "pr" ] && [ "$2" = "close" ]; then
+        exit 0
+      fi
+
+      exit 99
+      """,
+      fn log_path ->
+        output =
+          capture_io(fn ->
+            BeforeRemove.run(["--branch", "feature/string-numbers"])
+          end)
+
+        assert output =~ "Closed PR #201 for branch feature/string-numbers"
+        assert output =~ "Closed PR #202 for branch feature/string-numbers"
+
+        invalid_json_output =
+          capture_io(fn ->
+            Mix.Task.reenable("workspace.before_remove")
+            BeforeRemove.run(["--branch", "feature/invalid-json"])
+          end)
+
+        assert invalid_json_output == ""
+
+        log = File.read!(log_path)
+        assert log =~ "pr close 201 --repo openai/symphony"
+        assert log =~ "pr close 202 --repo openai/symphony"
+      end
+    )
+  end
+
+  test "command helpers support Windows command scripts" do
+    path = "C:/tools/gh.cmd"
+
+    assert BeforeRemove.command_runner(path, {:win32, :nt}, nil) == path
+    assert BeforeRemove.command_runner(path, {:win32, :nt}, "C:/Windows/System32/cmd.exe") == path
+    assert BeforeRemove.command_runner(path, {:unix, :linux}, "cmd") == path
+    assert BeforeRemove.command_args(path, ["pr", "list"], {:win32, :nt}) == ["pr", "list"]
+    assert BeforeRemove.command_args(path, ["pr", "list"], {:unix, :linux}) == ["pr", "list"]
+  end
+
   defp with_fake_gh(fun) do
     with_fake_binaries(
       %{
@@ -266,7 +326,7 @@ defmodule Mix.Tasks.Workspace.BeforeRemoveTest do
         fi
 
         if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
-          printf '101\n102\n'
+          printf '[{"number":101},{"number":102}]'
           exit 0
         fi
 
@@ -299,23 +359,22 @@ defmodule Mix.Tasks.Workspace.BeforeRemoveTest do
     root = Path.join(System.tmp_dir!(), "workspace-before-remove-task-test-#{unique}")
     bin_dir = Path.join(root, "bin")
     log_path = Path.join(root, "gh.log")
+    shell_log_path = shell_path(log_path)
 
     try do
       File.rm_rf!(root)
       File.mkdir_p!(bin_dir)
       File.write!(log_path, "")
       original_path = System.get_env("PATH") || ""
-      path_with_binaries = Enum.join([bin_dir, original_path], ":")
+      path_with_binaries = Enum.join([bin_dir, original_path], path_separator())
 
       Enum.each(scripts, fn {name, script} ->
-        path = Path.join(bin_dir, name)
-        File.write!(path, script)
-        File.chmod!(path, 0o755)
+        write_fake_binary!(bin_dir, name, script)
       end)
 
       with_env(
         %{
-          "GH_LOG" => log_path,
+          "GH_LOG" => shell_log_path,
           "PATH" => path_with_binaries
         },
         fn ->
@@ -328,7 +387,7 @@ defmodule Mix.Tasks.Workspace.BeforeRemoveTest do
   end
 
   defp with_path(paths, fun) do
-    with_env(%{"PATH" => Enum.join(paths, ":")}, fun)
+    with_env(%{"PATH" => Enum.join(paths, path_separator())}, fun)
   end
 
   defp with_env(overrides, fun) do
@@ -386,5 +445,67 @@ defmodule Mix.Tasks.Workspace.BeforeRemoveTest do
       end
 
     {output, error_output}
+  end
+
+  defp path_separator do
+    case :os.type() do
+      {:win32, _} -> ";"
+      _ -> ":"
+    end
+  end
+
+  defp shell_path(path) when is_binary(path) do
+    case :os.type() do
+      {:win32, _} ->
+        case path do
+          <<drive, ?:, rest::binary>> when drive in ?A..?Z or drive in ?a..?z ->
+            "/" <> String.downcase(<<drive>>) <> String.replace(rest, "\\", "/")
+
+          _ ->
+            String.replace(path, "\\", "/")
+        end
+
+      _ ->
+        path
+    end
+  end
+
+  defp preferred_bash do
+    git = System.find_executable("git")
+
+    [
+      git && Path.expand("../bin/bash.exe", Path.dirname(git)),
+      git && Path.expand("../usr/bin/bash.exe", Path.dirname(git)),
+      System.find_executable("bash"),
+      System.find_executable("sh")
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.find(&File.exists?/1)
+  end
+
+  defp write_fake_binary!(bin_dir, name, script) do
+    case :os.type() do
+      {:win32, _} ->
+        bash =
+          preferred_bash() ||
+            flunk("bash is required to run shell-backed fake binaries on Windows")
+
+        script_path = Path.join(bin_dir, "#{name}.sh")
+        command_path = Path.join(bin_dir, "#{name}.cmd")
+
+        File.write!(script_path, script)
+        File.chmod!(script_path, 0o755)
+
+        File.write!(command_path, """
+        @echo off
+        "#{bash}" "%~dp0#{name}.sh" %*
+        exit /b %ERRORLEVEL%
+        """)
+
+      _ ->
+        path = Path.join(bin_dir, name)
+        File.write!(path, script)
+        File.chmod!(path, 0o755)
+    end
   end
 end

@@ -4,7 +4,7 @@ defmodule SymphonyElixir.Linear.Client do
   """
 
   require Logger
-  alias SymphonyElixir.{Config, Linear.Issue}
+  alias SymphonyElixir.{Config, Tracker.Issue}
 
   @issue_page_size 50
   @max_error_body_log_bytes 1_000
@@ -109,7 +109,7 @@ defmodule SymphonyElixir.Linear.Client do
     project_slug = tracker.project_slug
 
     cond do
-      is_nil(tracker.api_key) ->
+      is_nil(tracker.api_token) ->
         {:error, :missing_linear_api_token}
 
       is_nil(project_slug) ->
@@ -133,7 +133,7 @@ defmodule SymphonyElixir.Linear.Client do
       project_slug = tracker.project_slug
 
       cond do
-        is_nil(tracker.api_key) ->
+        is_nil(tracker.api_token) ->
           {:error, :missing_linear_api_token}
 
         is_nil(project_slug) ->
@@ -381,7 +381,7 @@ defmodule SymphonyElixir.Linear.Client do
   end
 
   defp graphql_headers do
-    case Config.settings!().tracker.api_key do
+    case Config.settings!().tracker.api_token do
       nil ->
         {:error, :missing_linear_api_token}
 

@@ -1,6 +1,23 @@
 defmodule SymphonyElixir.CoreTest do
   use SymphonyElixir.TestSupport
 
+  defmodule CustomStateTracker do
+    @behaviour SymphonyElixir.Tracker
+
+    alias SymphonyElixir.Config.Schema
+
+    def list_active_issues(_settings), do: {:ok, []}
+    def fetch_issues_by_states(_states, _settings), do: {:ok, []}
+    def fetch_issue_states_by_ids(_issue_ids, _settings), do: {:ok, []}
+    def claim_issue(_issue, _settings), do: :ok
+    def post_comment(_issue, _body, _settings), do: {:ok, "comment-1"}
+    def update_comment(_issue, _comment_id, _body, _settings), do: :ok
+    def find_or_create_workpad_comment(_issue, _marker, _settings), do: {:ok, "comment-1"}
+    def update_issue_state(_issue, _state_name, _settings), do: :ok
+    def resolve_active_states(%Schema{}), do: ["Queued"]
+    def resolve_terminal_states(%Schema{}), do: ["Finished"]
+  end
+
   test "config defaults and validation checks" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_api_token: nil,
@@ -88,6 +105,38 @@ defmodule SymphonyElixir.CoreTest do
     assert {:error, {:unsupported_tracker_kind, "123"}} = Config.validate!()
   end
 
+  test "tracker module override controls adapter state semantics in dispatch" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_module: "SymphonyElixir.CoreTest.CustomStateTracker",
+      tracker_active_states: ["Todo"],
+      tracker_terminal_states: ["Done"]
+    )
+
+    assert SymphonyElixir.Tracker.adapter() == CustomStateTracker
+    assert SymphonyElixir.Tracker.resolve_active_states() == ["Queued"]
+    assert SymphonyElixir.Tracker.resolve_terminal_states() == ["Finished"]
+
+    state = %Orchestrator.State{
+      max_concurrent_agents: 3,
+      running: %{},
+      claimed: MapSet.new(),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    queued_issue = %Issue{
+      id: "custom-1",
+      identifier: "CT-1",
+      title: "Custom state issue",
+      state: "Queued"
+    }
+
+    todo_issue = %{queued_issue | state: "Todo"}
+
+    assert Orchestrator.should_dispatch_issue_for_test(queued_issue, state)
+    refute Orchestrator.should_dispatch_issue_for_test(todo_issue, state)
+  end
+
   test "current WORKFLOW.md file is valid and complete" do
     original_workflow_path = Workflow.workflow_file_path()
     on_exit(fn -> Workflow.set_workflow_file_path(original_workflow_path) end)
@@ -130,6 +179,54 @@ defmodule SymphonyElixir.CoreTest do
 
     assert Config.settings!().tracker.api_key == env_api_key
     assert Config.settings!().tracker.project_slug == "project"
+    assert :ok = Config.validate!()
+  end
+
+  test "github api token resolves from GITHUB_TOKEN env var" do
+    previous_github_token = System.get_env("GITHUB_TOKEN")
+    env_api_token = "test-github-token"
+
+    on_exit(fn -> restore_env("GITHUB_TOKEN", previous_github_token) end)
+    System.put_env("GITHUB_TOKEN", env_api_token)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "github",
+      tracker_api_token: nil,
+      tracker_project_slug: nil,
+      tracker_repo: "octo/demo",
+      codex_command: "/bin/sh app-server"
+    )
+
+    assert Config.settings!().tracker.api_token == env_api_token
+    assert Config.settings!().tracker.api_key == env_api_token
+    assert Config.settings!().tracker.repo == "octo/demo"
+    assert :ok = Config.validate!()
+  end
+
+  test "tracker module override resolves to the configured adapter" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "github",
+      tracker_repo: "octo/demo",
+      tracker_module: "SymphonyElixir.Tracker.Memory",
+      tracker_project_slug: nil,
+      codex_command: "/bin/sh app-server"
+    )
+
+    assert Config.settings!().tracker.module == "SymphonyElixir.Tracker.Memory"
+    assert SymphonyElixir.Tracker.adapter() == SymphonyElixir.Tracker.Memory
+    assert :ok = Config.validate!()
+  end
+
+  test "blank tracker module falls back to the tracker kind mapping" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "github",
+      tracker_repo: "octo/demo",
+      tracker_module: "   ",
+      tracker_project_slug: nil,
+      codex_command: "/bin/sh app-server"
+    )
+
+    assert SymphonyElixir.Tracker.adapter() == SymphonyElixir.Tracker.GitHub
     assert :ok = Config.validate!()
   end
 
@@ -705,9 +802,10 @@ defmodule SymphonyElixir.CoreTest do
 
   defp assert_due_in_range(due_at_ms, min_remaining_ms, max_remaining_ms) do
     remaining_ms = due_at_ms - System.monotonic_time(:millisecond)
+    slack_ms = if windows?(), do: 1_000, else: 250
 
-    assert remaining_ms >= min_remaining_ms
-    assert remaining_ms <= max_remaining_ms
+    assert remaining_ms >= min_remaining_ms - slack_ms
+    assert remaining_ms <= max_remaining_ms + slack_ms
   end
 
   defp restore_app_env(key, nil), do: Application.delete_env(:symphony_elixir, key)
@@ -836,7 +934,7 @@ defmodule SymphonyElixir.CoreTest do
 
     prompt = PromptBuilder.build_prompt(issue)
 
-    assert prompt =~ "You are working on a Linear issue."
+    assert prompt =~ "You are working on a tracker issue."
     assert prompt =~ "Identifier: MT-777"
     assert prompt =~ "Title: Make fallback prompt useful"
     assert prompt =~ "Body:"
@@ -912,7 +1010,7 @@ defmodule SymphonyElixir.CoreTest do
 
     prompt = PromptBuilder.build_prompt(issue, attempt: 2)
 
-    assert prompt =~ "You are working on a Linear ticket `MT-616`"
+    assert prompt =~ "You are working on a tracker issue `MT-616`"
     assert prompt =~ "Issue context:"
     assert prompt =~ "Identifier: MT-616"
     assert prompt =~ "Title: Use rich templates for WORKFLOW.md"
@@ -995,8 +1093,8 @@ defmodule SymphonyElixir.CoreTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        hook_after_create: "cp #{Path.join(template_repo, "README.md")} README.md",
-        codex_command: "#{codex_binary} app-server"
+        hook_after_create: "cp #{shell_path(Path.join(template_repo, "README.md"))} README.md",
+        codex_command: "#{shell_path(codex_binary)} app-server"
       )
 
       issue = %Issue{
@@ -1080,8 +1178,8 @@ defmodule SymphonyElixir.CoreTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        hook_after_create: "cp #{Path.join(template_repo, "README.md")} README.md",
-        codex_command: "#{codex_binary} app-server"
+        hook_after_create: "cp #{shell_path(Path.join(template_repo, "README.md"))} README.md",
+        codex_command: "#{shell_path(codex_binary)} app-server"
       )
 
       issue = %Issue{
@@ -1170,14 +1268,14 @@ defmodule SymphonyElixir.CoreTest do
       """)
 
       File.chmod!(codex_binary, 0o755)
-      System.put_env("SYMP_TEST_CODEx_TRACE", trace_file)
+      System.put_env("SYMP_TEST_CODEx_TRACE", shell_path(trace_file))
 
       on_exit(fn -> System.delete_env("SYMP_TEST_CODEx_TRACE") end)
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        hook_after_create: "cp #{Path.join(template_repo, "README.md")} README.md",
-        codex_command: "#{codex_binary} app-server",
+        hook_after_create: "cp #{shell_path(Path.join(template_repo, "README.md"))} README.md",
+        codex_command: "#{shell_path(codex_binary)} app-server",
         max_turns: 3
       )
 
@@ -1300,14 +1398,14 @@ defmodule SymphonyElixir.CoreTest do
       """)
 
       File.chmod!(codex_binary, 0o755)
-      System.put_env("SYMP_TEST_CODEx_TRACE", trace_file)
+      System.put_env("SYMP_TEST_CODEx_TRACE", shell_path(trace_file))
 
       on_exit(fn -> System.delete_env("SYMP_TEST_CODEx_TRACE") end)
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        hook_after_create: "cp #{Path.join(template_repo, "README.md")} README.md",
-        codex_command: "#{codex_binary} app-server",
+        hook_after_create: "cp #{shell_path(Path.join(template_repo, "README.md"))} README.md",
+        codex_command: "#{shell_path(codex_binary)} app-server",
         max_turns: 2
       )
 
@@ -1367,7 +1465,7 @@ defmodule SymphonyElixir.CoreTest do
         end
       end)
 
-      System.put_env("SYMP_TEST_CODex_TRACE", trace_file)
+      System.put_env("SYMP_TEST_CODex_TRACE", shell_path(trace_file))
       File.mkdir_p!(workspace)
 
       File.write!(codex_binary, """
@@ -1405,7 +1503,7 @@ defmodule SymphonyElixir.CoreTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server"
+        codex_command: "#{shell_path(codex_binary)} app-server"
       )
 
       issue = %Issue{
@@ -1513,7 +1611,7 @@ defmodule SymphonyElixir.CoreTest do
         end
       end)
 
-      System.put_env("SYMP_TEST_CODex_TRACE", trace_file)
+      System.put_env("SYMP_TEST_CODex_TRACE", shell_path(trace_file))
       File.mkdir_p!(workspace)
 
       File.write!(codex_binary, """
@@ -1549,7 +1647,7 @@ defmodule SymphonyElixir.CoreTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} --model gpt-5.3-codex app-server"
+        codex_command: "#{shell_path(codex_binary)} --model gpt-5.3-codex app-server"
       )
 
       issue = %Issue{
@@ -1598,7 +1696,7 @@ defmodule SymphonyElixir.CoreTest do
         end
       end)
 
-      System.put_env("SYMP_TEST_CODex_TRACE", trace_file)
+      System.put_env("SYMP_TEST_CODex_TRACE", shell_path(trace_file))
       File.mkdir_p!(workspace)
 
       File.write!(codex_binary, """
@@ -1638,7 +1736,7 @@ defmodule SymphonyElixir.CoreTest do
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
-        codex_command: "#{codex_binary} app-server",
+        codex_command: "#{shell_path(codex_binary)} app-server",
         codex_approval_policy: "on-request",
         codex_thread_sandbox: "workspace-write",
         codex_turn_sandbox_policy: %{

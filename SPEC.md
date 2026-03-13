@@ -6,9 +6,9 @@ Purpose: Define a service that orchestrates coding agents to get project work do
 
 ## 1. Problem Statement
 
-Symphony is a long-running automation service that continuously reads work from an issue tracker
-(Linear in this specification version), creates an isolated workspace for each issue, and runs a
-coding agent session for that issue inside the workspace.
+Symphony is a long-running automation service that continuously reads work from a configured issue
+tracker, creates an isolated workspace for each issue, and runs a coding agent session for that
+issue inside the workspace.
 
 The service solves four operational problems:
 
@@ -119,7 +119,7 @@ Symphony is easiest to port when kept in these layers:
 4. `Execution Layer` (workspace + agent subprocess)
    - Filesystem lifecycle, workspace preparation, coding-agent protocol.
 
-5. `Integration Layer` (Linear adapter)
+5. `Integration Layer` (tracker adapter)
    - API calls and normalization for tracker data.
 
 6. `Observability Layer` (logs + optional status surface)
@@ -127,7 +127,7 @@ Symphony is easiest to port when kept in these layers:
 
 ### 3.3 External Dependencies
 
-- Issue tracker API (Linear for `tracker.kind: linear` in this specification version).
+- Issue tracker API for the configured tracker kind (for example Linear or GitHub).
 - Local filesystem for workspaces and logs.
 - Optional workspace population tooling (for example Git CLI, if used).
 - Coding-agent executable that supports JSON-RPC-like app-server mode over stdio.
@@ -342,15 +342,26 @@ Fields:
 
 - `kind` (string)
   - Required for dispatch.
-  - Current supported value: `linear`
+  - Implementations may support multiple tracker kinds.
+  - The current Elixir implementation supports `linear`, `github`, and `memory`.
+- `module` (string)
+  - Optional override for the adapter module name.
+  - When set, this takes precedence over the default `tracker.kind -> adapter module` mapping.
 - `endpoint` (string)
   - Default for `tracker.kind == "linear"`: `https://api.linear.app/graphql`
-- `api_key` (string)
+  - Default for `tracker.kind == "github"`: `https://api.github.com`
+- `api_token` (string)
   - May be a literal token or `$VAR_NAME`.
   - Canonical environment variable for `tracker.kind == "linear"`: `LINEAR_API_KEY`.
+  - Canonical environment variable for `tracker.kind == "github"`: `GITHUB_TOKEN`.
   - If `$VAR_NAME` resolves to an empty string, treat the key as missing.
+- `api_key` (string)
+  - Legacy alias for `api_token`, kept for backward compatibility with existing Linear workflows.
 - `project_slug` (string)
   - Required for dispatch when `tracker.kind == "linear"`.
+- `repo` (string)
+  - Required for dispatch when `tracker.kind == "github"`.
+  - Format: `owner/repo`.
 - `active_states` (list of strings)
   - Default: `Todo`, `In Progress`
 - `terminal_states` (list of strings)
@@ -464,7 +475,7 @@ Template input variables:
 Fallback prompt behavior:
 
 - If the workflow prompt body is empty, the runtime may use a minimal default prompt
-  (`You are working on an issue from Linear.`).
+  (`You are working on a tracker issue.`).
 - Workflow file read/parse failures are configuration/validation errors and should not silently fall
   back to a prompt.
 
@@ -543,18 +554,26 @@ Validation checks:
 
 - Workflow file can be loaded and parsed.
 - `tracker.kind` is present and supported.
-- `tracker.api_key` is present after `$` resolution.
+- `tracker.api_token` or legacy `tracker.api_key` is present after `$` resolution when required by
+  the selected tracker kind.
 - `tracker.project_slug` is present when required by the selected tracker kind.
+- `tracker.repo` is present when required by the selected tracker kind.
 - `codex.command` is present and non-empty.
 
 ### 6.4 Config Fields Summary (Cheat Sheet)
 
 This section is intentionally redundant so a coding agent can implement the config layer quickly.
 
-- `tracker.kind`: string, required, currently `linear`
-- `tracker.endpoint`: string, default `https://api.linear.app/graphql` when `tracker.kind=linear`
-- `tracker.api_key`: string or `$VAR`, canonical env `LINEAR_API_KEY` when `tracker.kind=linear`
+- `tracker.kind`: string, required, implementation-defined (`linear` and `github` are first-class
+  in the current Elixir implementation)
+- `tracker.module`: optional adapter module override
+- `tracker.endpoint`: string, default `https://api.linear.app/graphql` for Linear and
+  `https://api.github.com` for GitHub
+- `tracker.api_token`: string or `$VAR`, canonical env `LINEAR_API_KEY` for Linear and
+  `GITHUB_TOKEN` for GitHub
+- `tracker.api_key`: legacy alias for `tracker.api_token`
 - `tracker.project_slug`: string, required when `tracker.kind=linear`
+- `tracker.repo`: string, required when `tracker.kind=github`
 - `tracker.active_states`: list of strings, default `["Todo", "In Progress"]`
 - `tracker.terminal_states`: list of strings, default `["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]`
 - `polling.interval_ms`: integer, default `30000`
@@ -1140,27 +1159,64 @@ Note:
 
 - Workspaces are intentionally preserved after successful runs.
 
-## 11. Issue Tracker Integration Contract (Linear-Compatible)
+## 11. Tracker Adapter Contract
 
 ### 11.1 Required Operations
 
 An implementation must support these tracker adapter operations:
 
-1. `fetch_candidate_issues()`
-   - Return issues in configured active states for a configured project.
-
-2. `fetch_issues_by_states(state_names)`
-   - Used for startup terminal cleanup.
-
-3. `fetch_issue_states_by_ids(issue_ids)`
+1. `list_active_issues(config)`
+   - Return issues currently in configured active states and eligible for dispatch.
+2. `fetch_issues_by_states(state_names, config)`
+   - Return issues matching explicit state names.
+   - Used for startup terminal cleanup and similar bulk refresh flows.
+3. `fetch_issue_states_by_ids(issue_ids, config)`
+   - Return the latest state for specific issue ids.
    - Used for active-run reconciliation.
+4. `claim_issue(issue, config)`
+   - Optional best-effort claim/lock hook.
+   - May be a no-op when the tracker has no native claim primitive.
+5. `post_comment(issue, body, config)`
+   - Create a tracker comment and return a tracker-native comment id.
+6. `update_comment(issue, comment_id, body, config)`
+   - Update an existing tracker comment in place.
+7. `find_or_create_workpad_comment(issue, marker, config)`
+   - Return the id of the single persistent workpad comment for the issue.
+   - The implementation should reuse an existing matching comment rather than creating duplicates.
+8. `update_issue_state(issue, state_name, config)`
+   - Move the issue into one of the configured workflow states.
+9. `resolve_active_states(config)`
+   - Return the effective active states for the selected adapter.
+10. `resolve_terminal_states(config)`
+    - Return the effective terminal states for the selected adapter.
 
-### 11.2 Query Semantics (Linear)
+Runtime registry requirements:
 
-Linear-specific requirements for `tracker.kind == "linear"`:
+- The registry maps `tracker.kind` to an adapter module.
+- Default mapping should be data-driven rather than hard-coded in orchestrator control flow.
+- `tracker.module` may override the default mapping with an explicit module name.
+- Adding a new tracker adapter should require only a new adapter module plus any tracker-specific
+  config, not orchestrator branching.
+
+### 11.2 Adapter Semantics
+
+Adapter behavior should be consistent across tracker kinds:
+
+- Reads must normalize tracker payloads into the issue model in Section 4.
+- State comparisons should be case-insensitive.
+- `find_or_create_workpad_comment` should be idempotent with respect to the chosen marker.
+- `update_issue_state` should reject unknown workflow states with a typed error.
+- Comment/update operations should expose tracker-native ids instead of forcing a single global id
+  format.
+- Adapters may enrich `Issue.meta` with tracker-specific details such as labels, repo metadata,
+  linked pull requests, or check status snapshots without changing the core issue shape.
+
+### 11.3 Tracker-Specific Configuration
+
+#### Linear
 
 - `tracker.kind == "linear"`
-- GraphQL endpoint (default `https://api.linear.app/graphql`)
+- GraphQL endpoint default: `https://api.linear.app/graphql`
 - Auth token sent in `Authorization` header
 - `tracker.project_slug` maps to Linear project `slugId`
 - Candidate issue query filters project using `project: { slugId: { eq: $projectSlug } }`
@@ -1169,37 +1225,41 @@ Linear-specific requirements for `tracker.kind == "linear"`:
 - Page size default: `50`
 - Network timeout: `30000 ms`
 
-Important:
+#### GitHub
 
-- Linear GraphQL schema details can drift. Keep query construction isolated and test the exact query
-  fields/types required by this specification.
+- `tracker.kind == "github"`
+- REST endpoint default: `https://api.github.com`
+- Auth token sent as a bearer token
+- `tracker.repo` identifies the repository as `owner/repo`
+- Active and terminal workflow states are represented by configured labels plus issue open/closed
+  state
+- Pull requests should not be treated as candidate issues when polling GitHub Issues
+- Adapter implementations should be able to create/update a persistent workpad issue comment and
+  move issues between configured active and terminal states
 
-A non-Linear implementation may change transport details, but the normalized outputs must match the
-domain model in Section 4.
-
-### 11.3 Normalization Rules
+### 11.4 Normalization Rules
 
 Candidate issue normalization should produce fields listed in Section 4.1.1.
 
 Additional normalization details:
 
 - `labels` -> lowercase strings
-- `blocked_by` -> derived from inverse relations where relation type is `blocks`
+- `blocked_by` -> derived from tracker-native dependency metadata when available
 - `priority` -> integer only (non-integers become null)
 - `created_at` and `updated_at` -> parse ISO-8601 timestamps
+- `identifier` should be a human-facing stable reference (`ABC-123`, `owner/repo#45`, etc.)
 
-### 11.4 Error Handling Contract
+### 11.5 Error Handling Contract
 
 Recommended error categories:
 
 - `unsupported_tracker_kind`
-- `missing_tracker_api_key`
+- `missing_tracker_api_token`
 - `missing_tracker_project_slug`
-- `linear_api_request` (transport failures)
-- `linear_api_status` (non-200 HTTP)
-- `linear_graphql_errors`
-- `linear_unknown_payload`
-- `linear_missing_end_cursor` (pagination integrity error)
+- `missing_github_repo`
+- `tracker_module_unavailable`
+- transport/status/payload errors scoped to the concrete adapter implementation
+  (`linear_api_request`, `linear_api_status`, `github_api_request`, `github_api_status`, etc.)
 
 Orchestrator behavior on tracker errors:
 
@@ -1207,17 +1267,18 @@ Orchestrator behavior on tracker errors:
 - Running-state refresh failure: log and keep active workers running.
 - Startup terminal cleanup failure: log warning and continue startup.
 
-### 11.5 Tracker Writes (Important Boundary)
+### 11.6 Tracker Writes (Important Boundary)
 
-Symphony does not require first-class tracker write APIs in the orchestrator.
+Symphony may expose adapter write APIs without making the orchestrator itself tracker-business-logic
+heavy.
 
-- Ticket mutations (state transitions, comments, PR metadata) are typically handled by the coding
-  agent using tools defined by the workflow prompt.
-- The service remains a scheduler/runner and tracker reader.
+- Ticket mutations (state transitions, comments, PR metadata) may be performed either by the coding
+  agent through workflow tools or by explicit adapter helpers exposed by the runtime.
+- The service remains a scheduler/runner whose core control flow should stay tracker-agnostic.
 - Workflow-specific success often means "reached the next handoff state" (for example
   `Human Review`) rather than tracker terminal state `Done`.
-- If the optional `linear_graphql` client-side tool extension is implemented, it is still part of
-  the agent toolchain rather than orchestrator business logic.
+- If the optional `linear_graphql` client-side tool extension is implemented, it remains a
+  Linear-specific convenience tool layered on top of the adapter contract above.
 
 ## 12. Prompt Construction and Context Assembly
 
@@ -1942,8 +2003,12 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Invalid YAML front matter returns typed error
 - Front matter non-map returns typed error
 - Config defaults apply when optional values are missing
-- `tracker.kind` validation enforces currently supported kind (`linear`)
-- `tracker.api_key` works (including `$VAR` indirection)
+- `tracker.kind` validation enforces the supported adapter kinds for the implementation
+- `tracker.api_token` works (including `$VAR` indirection)
+- legacy `tracker.api_key` remains compatible with `tracker.api_token`
+- `tracker.module` override resolves an explicit adapter module when configured
+- tracker-kind-specific required fields are enforced (`project_slug` for Linear, `repo` for
+  GitHub)
 - `$VAR` resolution works for tracker API key and path values
 - `~` path expansion works
 - `codex.command` is preserved as a shell command string
@@ -2100,7 +2165,6 @@ Use the same validation profiles as Section 17:
   implementation details.
 - TODO: Add first-class tracker write APIs (comments/state transitions) in the orchestrator instead
   of only via agent tools.
-- TODO: Add pluggable issue tracker adapters beyond Linear.
 
 ### 18.3 Operational Validation Before Production (Recommended)
 

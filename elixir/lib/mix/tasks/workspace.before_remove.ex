@@ -71,16 +71,27 @@ defmodule Mix.Tasks.Workspace.BeforeRemove do
            "--state",
            "open",
            "--json",
-           "number",
-           "--jq",
-           ".[].number"
+           "number"
          ]) do
       {:ok, output} ->
-        output
-        |> String.split("\n", trim: true)
-        |> Enum.reject(&(&1 == ""))
+        parse_pull_request_numbers(output)
 
       {:error, _reason} ->
+        []
+    end
+  end
+
+  defp parse_pull_request_numbers(output) when is_binary(output) do
+    case Jason.decode(output) do
+      {:ok, entries} when is_list(entries) ->
+        entries
+        |> Enum.flat_map(fn
+          %{"number" => number} when is_integer(number) -> [to_string(number)]
+          %{"number" => number} when is_binary(number) -> [number]
+          _ -> []
+        end)
+
+      _ ->
         []
     end
   end
@@ -106,7 +117,7 @@ defmodule Mix.Tasks.Workspace.BeforeRemove do
   end
 
   defp closing_comment(branch) do
-    "Closing because the Linear issue for branch #{branch} entered a terminal state without merge."
+    "Closing because the tracker issue for branch #{branch} entered a terminal state without merge."
   end
 
   defp format_output(""), do: ""
@@ -131,10 +142,18 @@ defmodule Mix.Tasks.Workspace.BeforeRemove do
         {:error, {:enoent, ""}}
 
       path ->
-        case System.cmd(path, args, stderr_to_stdout: true) do
+        case System.cmd(command_runner(path), command_args(path, args), stderr_to_stdout: true) do
           {output, 0} -> {:ok, output}
           {output, status} -> {:error, {status, output}}
         end
     end
   end
+
+  @doc false
+  @spec command_runner(Path.t(), tuple(), Path.t() | nil) :: Path.t()
+  def command_runner(path, _os_type \\ :os.type(), _shell_command \\ System.get_env("COMSPEC") || "cmd"), do: path
+
+  @doc false
+  @spec command_args(Path.t(), [String.t()], tuple()) :: [String.t()]
+  def command_args(_path, args, _os_type \\ :os.type()), do: args
 end

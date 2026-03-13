@@ -1,6 +1,6 @@
-defmodule SymphonyElixir.Linear.Issue do
+defmodule SymphonyElixir.Tracker.Issue do
   @moduledoc """
-  Deprecated normalized issue representation kept for compatibility.
+  Normalized issue representation used by the orchestrator across tracker adapters.
   """
 
   defstruct [
@@ -17,7 +17,8 @@ defmodule SymphonyElixir.Linear.Issue do
     labels: [],
     assigned_to_worker: true,
     created_at: nil,
-    updated_at: nil
+    updated_at: nil,
+    meta: %{}
   ]
 
   @type t :: %__MODULE__{
@@ -33,7 +34,8 @@ defmodule SymphonyElixir.Linear.Issue do
           labels: [String.t()],
           assigned_to_worker: boolean(),
           created_at: DateTime.t() | nil,
-          updated_at: DateTime.t() | nil
+          updated_at: DateTime.t() | nil,
+          meta: map()
         }
 
   @spec label_names(t()) :: [String.t()]

@@ -4,7 +4,7 @@ defmodule SymphonyElixir.Workspace do
   """
 
   require Logger
-  alias SymphonyElixir.{Config, PathSafety}
+  alias SymphonyElixir.{Config, PathSafety, Shell}
 
   @excluded_entries MapSet.new([".elixir_ls", "tmp"])
 
@@ -178,21 +178,34 @@ defmodule SymphonyElixir.Workspace do
 
     Logger.info("Running workspace hook hook=#{hook_name} #{issue_log_context(issue_context)} workspace=#{workspace}")
 
-    task =
-      Task.async(fn ->
-        System.cmd("sh", ["-lc", command], cd: workspace, stderr_to_stdout: true)
-      end)
+    case hook_shell() do
+      {:ok, shell} ->
+        task =
+          Task.async(fn ->
+            System.cmd(shell, ["-lc", command], cd: workspace, stderr_to_stdout: true)
+          end)
 
-    case Task.yield(task, timeout_ms) do
-      {:ok, cmd_result} ->
-        handle_hook_command_result(cmd_result, workspace, issue_context, hook_name)
+        case Task.yield(task, timeout_ms) do
+          {:ok, cmd_result} ->
+            handle_hook_command_result(cmd_result, workspace, issue_context, hook_name)
 
-      nil ->
-        Task.shutdown(task, :brutal_kill)
+          nil ->
+            Task.shutdown(task, :brutal_kill)
 
-        Logger.warning("Workspace hook timed out hook=#{hook_name} #{issue_log_context(issue_context)} workspace=#{workspace} timeout_ms=#{timeout_ms}")
+            Logger.warning("Workspace hook timed out hook=#{hook_name} #{issue_log_context(issue_context)} workspace=#{workspace} timeout_ms=#{timeout_ms}")
 
-        {:error, {:workspace_hook_timeout, hook_name, timeout_ms}}
+            {:error, {:workspace_hook_timeout, hook_name, timeout_ms}}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp hook_shell do
+    case Shell.bash() do
+      nil -> {:error, :workspace_hook_shell_not_found}
+      shell -> {:ok, shell}
     end
   end
 

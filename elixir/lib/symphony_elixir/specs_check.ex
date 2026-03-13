@@ -33,11 +33,31 @@ defmodule SymphonyElixir.SpecsCheck do
         [path]
 
       File.dir?(path) ->
-        Path.wildcard(Path.join(path, "**/*.ex"))
+        collect_elixir_files_in_dir(path)
 
       true ->
         []
     end
+  end
+
+  defp collect_elixir_files_in_dir(path) do
+    path
+    |> File.ls!()
+    |> Enum.sort()
+    |> Enum.flat_map(fn entry ->
+      entry_path = Path.join(path, entry)
+
+      cond do
+        File.dir?(entry_path) ->
+          collect_elixir_files_in_dir(entry_path)
+
+        String.ends_with?(entry_path, ".ex") ->
+          [entry_path]
+
+        true ->
+          []
+      end
+    end)
   end
 
   defp file_findings(file, exemptions) do

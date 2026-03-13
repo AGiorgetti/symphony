@@ -13,15 +13,16 @@ This directory contains the current Elixir/OTP implementation of Symphony, based
 
 ## How it works
 
-1. Polls Linear for candidate work
+1. Polls the configured tracker adapter for candidate work
 2. Creates a workspace per issue
 3. Launches Codex in [App Server mode](https://developers.openai.com/codex/app-server/) inside the
    workspace
 4. Sends a workflow prompt to Codex
 5. Keeps Codex working on the issue until the work is done
 
-During app-server sessions, Symphony also serves a client-side `linear_graphql` tool so that repo
-skills can make raw Linear GraphQL calls.
+During app-server sessions, Symphony can also serve tracker-specific helper tools. The current
+Elixir implementation exposes `linear_graphql` for Linear workflows, while GitHub workflows rely on
+the pluggable GitHub adapter plus repo-local skills/MCP tooling.
 
 If a claimed issue moves to a terminal state (`Done`, `Closed`, `Cancelled`, or `Duplicate`),
 Symphony stops the active agent for that issue and cleans up matching workspaces.
@@ -30,15 +31,19 @@ Symphony stops the active agent for that issue and cleans up matching workspaces
 
 1. Make sure your codebase is set up to work well with agents: see
    [Harness engineering](https://openai.com/index/harness-engineering/).
-2. Get a new personal token in Linear via Settings → Security & access → Personal API keys, and
-   set it as the `LINEAR_API_KEY` environment variable.
+2. Choose a tracker:
+   - Linear: create a personal API key and set `LINEAR_API_KEY`.
+   - GitHub Issues: create a token with issue/comment access and set `GITHUB_TOKEN`.
 3. Copy this directory's `WORKFLOW.md` to your repo.
-4. Optionally copy the `commit`, `push`, `pull`, `land`, and `linear` skills to your repo.
+4. Optionally copy the `commit`, `push`, `pull`, `land`, `linear`, and `github` skills to your repo.
    - The `linear` skill expects Symphony's `linear_graphql` app-server tool for raw Linear GraphQL
      operations such as comment editing or upload flows.
+   - The `github` skill expects GitHub MCP tools when available and otherwise falls back to
+     token-backed GitHub issue/PR operations.
 5. Customize the copied `WORKFLOW.md` file for your project.
-   - To get your project's slug, right-click the project and copy its URL. The slug is part of the
-     URL.
+   - For Linear, `tracker.project_slug` is required. Right-click the project and copy its URL; the
+     slug is part of the URL.
+   - For GitHub, set `tracker.kind: github` and `tracker.repo: "owner/repo"`.
    - When creating a workflow based on this repo, note that it depends on non-standard Linear
      issue statuses: "Rework", "Human Review", and "Merging". You can customize them in
      Team Settings → Workflow in Linear.
@@ -63,6 +68,20 @@ mise install
 mise exec -- mix setup
 mise exec -- mix build
 mise exec -- ./bin/symphony ./WORKFLOW.md
+```
+
+### Windows
+
+If you are running Symphony on Windows, build the release after the normal setup/build steps:
+
+```powershell
+mise exec -- mix release
+```
+
+Then launch the generated release instead of relying on the Unix-style `./bin/symphony` example:
+
+```powershell
+.\_build\dev\rel\symphony_elixir\bin\symphony_elixir.bat .\WORKFLOW.md
 ```
 
 ## Configuration
@@ -102,9 +121,18 @@ codex:
   command: codex app-server
 ---
 
-You are working on a Linear issue {{ issue.identifier }}.
+You are working on a tracker issue {{ issue.identifier }}.
 
 Title: {{ issue.title }} Body: {{ issue.description }}
+```
+
+GitHub variant:
+
+```yaml
+tracker:
+  kind: github
+  repo: "owner/repo"
+  api_token: $GITHUB_TOKEN
 ```
 
 Notes:
@@ -127,7 +155,11 @@ Notes:
   `git clone ... .` there, along with any other setup commands you need.
 - If a hook needs `mise exec` inside a freshly cloned workspace, trust the repo config and fetch
   the project dependencies in `hooks.after_create` before invoking `mise` later from other hooks.
-- `tracker.api_key` reads from `LINEAR_API_KEY` when unset or when value is `$LINEAR_API_KEY`.
+- `tracker.module` optionally overrides the default `tracker.kind -> adapter module` mapping.
+- `tracker.api_token` reads from `LINEAR_API_KEY` for Linear and `GITHUB_TOKEN` for GitHub when
+  unset or when value is `$LINEAR_API_KEY` / `$GITHUB_TOKEN`.
+- `tracker.api_key` remains a legacy alias for `tracker.api_token` so older Linear workflows keep
+  working.
 - For path values, `~` is expanded to the home directory.
 - For env-backed path values, use `$VAR`. `workspace.root` resolves `$VAR` before path handling,
   while `codex.command` stays a shell command string and any `$VAR` expansion there happens in the
@@ -135,7 +167,7 @@ Notes:
 
 ```yaml
 tracker:
-  api_key: $LINEAR_API_KEY
+  api_token: $LINEAR_API_KEY
 workspace:
   root: $SYMPHONY_WORKSPACE_ROOT
 hooks:
@@ -191,6 +223,20 @@ The live test creates a temporary Linear project and issue, writes a temporary `
 runs a real agent turn, verifies the workspace side effect, requires Codex to comment on and close
 the Linear issue, then marks the project completed so the run remains visible in Linear.
 `make e2e` fails fast with a clear error if `LINEAR_API_KEY` is unset.
+
+Run the live GitHub adapter smoke test when you want Symphony to create and close a disposable
+GitHub issue through the adapter layer:
+
+```bash
+cd elixir
+export GITHUB_TOKEN=...
+SYMPHONY_RUN_LIVE_E2E=1 mix test test/symphony_elixir/live_github_adapter_test.exs
+```
+
+Optional environment variables:
+
+- `SYMPHONY_LIVE_GITHUB_REPO` overrides the repository used for the throwaway issue
+- otherwise the test derives `owner/repo` from `git remote get-url origin`
 
 ## FAQ
 

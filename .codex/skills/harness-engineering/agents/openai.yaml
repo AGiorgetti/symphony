@@ -1,0 +1,4 @@
+interface:
+  display_name: "Harness Engineering"
+  short_description: "Agent-first repo scaffolding and guardrails"
+  default_prompt: "Use $harness-engineering to make this repository more legible, enforceable, and agent-friendly."
